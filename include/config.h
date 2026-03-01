@@ -19,3 +19,4 @@ const int PWM_50  = 127;
 // --- Scheduling Constants ---
 const int MAX_SCHEDULES = 5;
 const long TIMEZONE_OFFSET_SEC = -21600; // UTC-6 for Merida standard time (no DST)
+const unsigned long VALVE_OVERLAP_MS = 5000; // Both valves open during phase transitions

@@ -85,14 +85,19 @@ void loop() {
   bool autoOutside = outsideAutoSwitch.isOn();
 
   if (scheduleRunning) {
-    unsigned long elapsedMillis = millis() - scheduleStartTimeMillis;
-    unsigned long currentPhaseMinutes = elapsedMillis / 60000UL;
-    bool evenPhase = (currentPhaseMinutes / 5) % 2 == 0;
+    unsigned long elapsedMillis   = millis() - scheduleStartTimeMillis;
+    unsigned long phaseDurationMs = 5UL * 60000UL;
+    unsigned long phaseElapsedMs  = elapsedMillis % phaseDurationMs;
+    unsigned long phaseNum        = elapsedMillis / phaseDurationMs;
+    bool evenPhase = (phaseNum % 2) == 0;
+    bool inOverlap = phaseElapsedMs < VALVE_OVERLAP_MS;
 
     if (evenPhase) {
-      reqInside = autoInside; reqOutside = false;        // Phase 1, 3, 5... = Inside (if enabled)
+      reqInside  = autoInside;
+      reqOutside = inOverlap ? autoOutside : false; // Keep outside open briefly at start of inside phase
     } else {
-      reqInside = false;      reqOutside = autoOutside;  // Phase 2, 4, 6... = Outside (if enabled)
+      reqOutside = autoOutside;
+      reqInside  = inOverlap ? autoInside  : false; // Keep inside open briefly at start of outside phase
     }
   }
 

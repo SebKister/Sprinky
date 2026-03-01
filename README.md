@@ -44,8 +44,8 @@ src/
 
 ### Manual watering (physical switches)
 
-*   **Inside switch (pin 15)**: held ON → waters inside zone
-*   **Outside switch (pin 16)**: held ON → waters outside zone
+***Inside switch (pin 15)**: held ON → waters inside zone
+***Outside switch (pin 16)**: held ON → waters outside zone
 
 Manual switches work at any time and are independent of schedules or auto switches.
 
@@ -53,9 +53,9 @@ Manual switches work at any time and are independent of schedules or auto switch
 
 Up to 5 schedules can be configured via the web page. Each schedule has:
 
-*   **Active** checkbox — enables or disables the schedule
-*   **Start time** — hour and minute (UTC-6) at which the schedule triggers
-*   **Duration** — total watering time in minutes
+***Active** checkbox — enables or disables the schedule
+***Start time** — hour and minute (UTC-6) at which the schedule triggers
+***Duration** — total watering time in minutes
 
 When a schedule starts it alternates between zones in 5-minute phases:
 
@@ -84,17 +84,32 @@ To protect the pump, the following sequence is enforced on every state change:
 2. Wait 50 ms
 3. Close all valves
 
-### Valve PWM hold
+### Phase transition overlap
 
-Valves are driven with full PWM (255) for the first 2 seconds (`PWM_100_DURATION_MS`) to ensure they open reliably, then held at half power (127) to reduce heat and current draw.
+At each 5-minute phase boundary, both zone valves remain open simultaneously for `VALVE_OVERLAP_MS` (default 5 seconds) before the outgoing valve closes. This prevents a pressure drop during the switch and results in a smoother transition. The pump and tank valve stay on continuously throughout.
+
+### Valve PWM
+
+Each valve has two independently configurable PWM levels:
+
+| Phase    | Default | Purpose                                                                          |
+|----------|---------|----------------------------------------------------------------------------------|
+| **On**   | 100 %   | Full power for the first 2 s (`PWM_100_DURATION_MS`) to ensure reliable opening  |
+| **Hold** | 50 %    | Reduced power after opening to limit heat and current draw                       |
+
+Both percentages are configurable per valve from the web interface and saved to flash.
 
 ### Time synchronisation
 
-*   Initial sync at boot via UDP NTP (5 attempts, 2-second timeout each)
-*   Re-syncs every hour while running
-*   If offline at boot, retries every 10 seconds until a response is received
-*   Between syncs, time is estimated by extrapolating from `millis()`
+* Initial sync at boot via UDP NTP (5 attempts, 2-second timeout each)
+* Re-syncs every hour while running
+* If offline at boot, retries every 10 seconds until a response is received
+* Between syncs, time is estimated by extrapolating from `millis()`
 
 ### Web interface
 
-Accessible at `http://192.168.1.200` on the local network. Displays the current time and allows viewing and editing all schedules. Changes are saved to flash immediately on submit.
+Accessible at `http://192.168.1.200` on the local network. Provides:
+
+* **Status table** — live state of pump, all three valves, all four switches, and active schedule
+* **Schedules** — view and edit up to 5 schedules (active flag, start time, duration); saved to flash on submit
+* **Valve PWM %** — set On % and Hold % independently for each valve; applied immediately and saved to flash
