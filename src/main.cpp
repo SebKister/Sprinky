@@ -35,6 +35,9 @@ void setup() {
   insideAutoSwitch.begin(); outsideAutoSwitch.begin();
 
   loadSchedules();
+  loadValvePwm();
+  insideValve.setPwmOn(valvePwm[0]);   outsideValve.setPwmOn(valvePwm[1]);   tankValve.setPwmOn(valvePwm[2]);
+  insideValve.setPwmHold(valvePwm[3]); outsideValve.setPwmHold(valvePwm[4]); tankValve.setPwmHold(valvePwm[5]);
 
   // Connect WiFi
   if (WiFi.status() == WL_NO_MODULE) {
@@ -76,8 +79,10 @@ void loop() {
   manageSchedules();
   handleClient();
 
-  bool reqInside  = insideSwitch.isOn();
-  bool reqOutside = outsideSwitch.isOn();
+  bool reqInside   = insideSwitch.isOn();
+  bool reqOutside  = outsideSwitch.isOn();
+  bool autoInside  = insideAutoSwitch.isOn();  // Always polled to keep debounce state current
+  bool autoOutside = outsideAutoSwitch.isOn();
 
   if (scheduleRunning) {
     unsigned long elapsedMillis = millis() - scheduleStartTimeMillis;
@@ -85,16 +90,16 @@ void loop() {
     bool evenPhase = (currentPhaseMinutes / 5) % 2 == 0;
 
     if (evenPhase) {
-      reqInside = insideAutoSwitch.isOn(); reqOutside = false; // Phase 1, 3, 5... = Inside (if enabled)
+      reqInside = autoInside; reqOutside = false;        // Phase 1, 3, 5... = Inside (if enabled)
     } else {
-      reqInside = false; reqOutside = outsideAutoSwitch.isOn(); // Phase 2, 4, 6... = Outside (if enabled)
+      reqInside = false;      reqOutside = autoOutside;  // Phase 2, 4, 6... = Outside (if enabled)
     }
   }
 
   bool anyDemanded = reqInside || reqOutside;
 
   if (!anyDemanded) {
-    if (pumpActive || insideValve.isActive() || outsideValve.isActive() || tankValve.isActive()) {
+    if (pumpActive || waitingForPump || insideValve.isActive() || outsideValve.isActive() || tankValve.isActive()) {
       pumpActive = false;
       digitalWrite(PIN_PUMP, LOW);
       delay(50);

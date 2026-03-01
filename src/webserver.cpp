@@ -1,8 +1,19 @@
 #include <WiFiNINA.h>
 #include "webserver.h"
+#include "hardware.h"
 #include "schedule.h"
 #include "ntp.h"
 #include "config.h"
+
+extern Valve insideValve;
+extern Valve outsideValve;
+extern Valve tankValve;
+extern bool pumpActive;
+
+extern Switch insideSwitch;
+extern Switch outsideSwitch;
+extern Switch insideAutoSwitch;
+extern Switch outsideAutoSwitch;
 
 static WiFiServer server(80);
 
@@ -36,6 +47,7 @@ void handleClient() {
 
   String reqLine = "";
   bool formSubmitted = false;
+  bool pwmSubmitted  = false;
 
   while (client.connected()) {
     if (client.available()) {
@@ -56,6 +68,36 @@ void handleClient() {
           client.print("<p>Current System Time: ");
           client.print(timeStrDisp);
           client.println(" (UTC-6)</p>");
+
+          // --- Hardware status ---
+          client.println("<h3>Status</h3>");
+          client.println("<table><tr><th>Component</th><th>State</th></tr>");
+
+          auto stateCell = [&](WiFiClient& c, const char* label, bool on, const char* onText, const char* offText) {
+            c.print("<tr><td>"); c.print(label); c.print("</td>");
+            c.print("<td style='color:"); c.print(on ? "green" : "gray"); c.print("'>");
+            c.print(on ? onText : offText);
+            c.println("</td></tr>");
+          };
+
+          stateCell(client, "Pump",                pumpActive,                    "ON",   "OFF");
+          stateCell(client, "Tank Valve",        tankValve.isActive(),          "OPEN", "CLOSED");
+          stateCell(client, "Inside Valve",      insideValve.isActive(),        "OPEN", "CLOSED");
+          stateCell(client, "Outside Valve",     outsideValve.isActive(),       "OPEN", "CLOSED");
+          stateCell(client, "Inside Switch",     insideSwitch.getState(),       "ON",   "OFF");
+          stateCell(client, "Outside Switch",    outsideSwitch.getState(),      "ON",   "OFF");
+          stateCell(client, "Inside Auto SW",    insideAutoSwitch.getState(),   "ON",   "OFF");
+          stateCell(client, "Outside Auto SW",   outsideAutoSwitch.getState(),  "ON",   "OFF");
+
+          if (scheduleRunning) {
+            client.print("<tr><td>Schedule</td><td style='color:green'>Running (#");
+            client.print(currentScheduleIndex);
+            client.println(")</td></tr>");
+          } else {
+            client.println("<tr><td>Schedule</td><td style='color:gray'>Idle</td></tr>");
+          }
+
+          client.println("</table>");
 
           if (formSubmitted) {
             client.println("<p style='color:green'>Schedules Updated & Saved to Flash!</p>");
@@ -80,6 +122,28 @@ void handleClient() {
 
             client.println("</tr>");
           }
+          client.println("</table><br><input type='submit' value='Save'></form>");
+
+          // --- Valve PWM settings ---
+          if (pwmSubmitted) {
+            client.println("<p style='color:green'>Valve PWM Saved!</p>");
+          }
+          client.println("<h3>Valve PWM %</h3>");
+          client.println("<form action='/savepwm' method='GET'>");
+          client.println("<table><tr><th>Valve</th><th>On %</th><th>Hold %</th></tr>");
+
+          client.print("<tr><td>Inside</td>");
+          client.print("<td><input type='number' name='vi' value='"); client.print(insideValve.getPwmOn());   client.print("' min='0' max='100'></td>");
+          client.print("<td><input type='number' name='hi' value='"); client.print(insideValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
+
+          client.print("<tr><td>Outside</td>");
+          client.print("<td><input type='number' name='vo' value='"); client.print(outsideValve.getPwmOn());   client.print("' min='0' max='100'></td>");
+          client.print("<td><input type='number' name='ho' value='"); client.print(outsideValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
+
+          client.print("<tr><td>Tank</td>");
+          client.print("<td><input type='number' name='vt' value='"); client.print(tankValve.getPwmOn());   client.print("' min='0' max='100'></td>");
+          client.print("<td><input type='number' name='ht' value='"); client.print(tankValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
+
           client.println("</table><br><input type='submit' value='Save'></form>");
 
           printHTMLFooter(client);
@@ -132,6 +196,32 @@ void handleClient() {
             }
 
             saveSchedules();
+          } else if (reqLine.startsWith("GET /savepwm?")) {
+            pwmSubmitted = true;
+
+            int searchPos = 13;
+            int httpPos   = reqLine.indexOf(" HTTP/", searchPos);
+            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
+
+            while (searchPos < paramsEnd) {
+              int nextAmp = reqLine.indexOf('&', searchPos);
+              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
+
+              String pair = reqLine.substring(searchPos, endStr);
+              int eq = pair.indexOf('=');
+              if (eq > 0) {
+                String key = pair.substring(0, eq);
+                int    val = constrain(pair.substring(eq + 1).toInt(), 0, 100);
+                if      (key == "vi") { valvePwm[0] = val; insideValve.setPwmOn(val); }
+                else if (key == "vo") { valvePwm[1] = val; outsideValve.setPwmOn(val); }
+                else if (key == "vt") { valvePwm[2] = val; tankValve.setPwmOn(val); }
+                else if (key == "hi") { valvePwm[3] = val; insideValve.setPwmHold(val); }
+                else if (key == "ho") { valvePwm[4] = val; outsideValve.setPwmHold(val); }
+                else if (key == "ht") { valvePwm[5] = val; tankValve.setPwmHold(val); }
+              }
+              searchPos = endStr + 1;
+            }
+            saveValvePwm();
           }
           reqLine = "";
         }

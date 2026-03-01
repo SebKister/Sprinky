@@ -3,12 +3,16 @@
 #include "ntp.h"
 #include "config.h"
 
-static const char SCHEDULE_FILENAME[] = "/schedules.dat";
+static const char SCHEDULE_FILENAME[]  = "/schedules.dat";
+static const char VALVEPWM_FILENAME[]  = "/valvepwm.dat";
 
 Schedule schedules[MAX_SCHEDULES];
 bool scheduleRunning = false;
 unsigned long scheduleStartTimeMillis = 0;
 int currentScheduleIndex = -1;
+
+// [0-2] = on% for inside/outside/tank, [3-5] = hold% for inside/outside/tank
+int valvePwm[6] = {100, 100, 100, 50, 50, 50};
 
 void loadSchedules() {
   if (WiFiStorage.exists(SCHEDULE_FILENAME)) {
@@ -32,6 +36,29 @@ void saveSchedules() {
   if (file) {
     file.erase();
     file.write((uint8_t*)schedules, sizeof(Schedule) * MAX_SCHEDULES);
+    file.close();
+  }
+}
+
+void loadValvePwm() {
+  if (WiFiStorage.exists(VALVEPWM_FILENAME)) {
+    WiFiStorageFile file = WiFiStorage.open(VALVEPWM_FILENAME);
+    if (file) {
+      file.read((uint8_t*)valvePwm, sizeof(valvePwm));
+      file.close();
+      for (int i = 0; i < 6; i++) {
+        int def = (i < 3) ? 100 : 50;
+        if (valvePwm[i] < 0 || valvePwm[i] > 100) valvePwm[i] = def;
+      }
+    }
+  }
+}
+
+void saveValvePwm() {
+  WiFiStorageFile file = WiFiStorage.open(VALVEPWM_FILENAME);
+  if (file) {
+    file.erase();
+    file.write((uint8_t*)valvePwm, sizeof(valvePwm));
     file.close();
   }
 }

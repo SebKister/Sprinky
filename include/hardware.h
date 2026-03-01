@@ -8,9 +8,16 @@ class Valve {
   bool active;
   bool holding;
   unsigned long activeStartTime;
+  int pwmOnPct;   // 0-100 %, applied during initial open phase
+  int pwmHoldPct; // 0-100 %, applied after PWM_100_DURATION_MS to hold valve open
 
 public:
-  Valve(int p) : pin(p), active(false), holding(false), activeStartTime(0) {}
+  Valve(int p) : pin(p), active(false), holding(false), activeStartTime(0), pwmOnPct(100), pwmHoldPct(50) {}
+
+  void setPwmOn(int pct)   { pwmOnPct   = constrain(pct, 0, 100); }
+  int  getPwmOn()  const   { return pwmOnPct; }
+  void setPwmHold(int pct) { pwmHoldPct = constrain(pct, 0, 100); }
+  int  getPwmHold() const  { return pwmHoldPct; }
 
   void begin() {
     pinMode(pin, OUTPUT);
@@ -22,7 +29,7 @@ public:
       active = true;
       holding = false;
       activeStartTime = millis();
-      analogWrite(pin, PWM_100);
+      analogWrite(pin, pwmOnPct * 255 / 100);
     }
   }
 
@@ -38,7 +45,7 @@ public:
     if (active && !holding) {
       if (millis() - activeStartTime >= PWM_100_DURATION_MS) {
         holding = true;
-        analogWrite(pin, PWM_50);
+        analogWrite(pin, pwmHoldPct * 255 / 100);
       }
     }
   }
@@ -72,4 +79,6 @@ public:
     lastReading = reading;
     return state;
   }
+
+  bool getState() const { return state; }
 };
