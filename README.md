@@ -15,6 +15,29 @@ Firmware for a device that controls a sprinkler system, built for Arduino Nano R
 | 16  | Outside manual switch  |
 | 17  | Outside auto switch    |
 
+### Pin diagram
+
+```text
+                          Arduino Nano RP2040 Connect
+                          ┌────────────────────────┐
+                    D13 ──┤○                      ○├── D12
+                    3V3 ──┤○                      ○├── D11
+                   AREF ──┤○                      ○├── D10
+    D14 · Inside auto sw ──┤○                      ○├── D9
+   D15 · Inside manual sw ──┤○                      ○├── D8
+  D16 · Outside manual sw ──┤○                      ○├── D7
+   D17 · Outside auto sw ──┤○                      ○├── D6
+                  A4/D18 ──┤○                      ○├── D5 · Tank valve
+                  A5/D19 ──┤○                      ○├── D4 · Outside valve
+                      A6 ──┤○                      ○├── D3 · Inside valve
+                      A7 ──┤○                      ○├── D2 · Pump relay
+                      5V ──┤○                      ○├── GND
+                     RST ──┤○                      ○├── RST
+                     GND ──┤○                      ○├── TX
+                     VIN ──┤○                      ○├── RX
+                          └────────────────────────┘
+```
+
 ## Project Structure
 
 ```text
