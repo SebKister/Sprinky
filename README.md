@@ -1,8 +1,15 @@
 # Sprinky
 
-Firmware for a device that controls a sprinkler system, built for Arduino Nano RP2040 Connect via PlatformIO.
+Firmware for a sprinkler control system supporting two targets:
+
+| PlatformIO env      | Board                        |
+|---------------------|------------------------------|
+| `nanorp2040connect` | Arduino Nano RP2040 Connect  |
+| `esp32s3`           | YD-ESP32-S3 (2022-v1.3)      |
 
 ## Hardware Setup
+
+### Arduino Nano RP2040 Connect
 
 | Pin | Component              |
 |-----|------------------------|
@@ -38,6 +45,60 @@ Firmware for a device that controls a sprinkler system, built for Arduino Nano R
                           └────────────────────────┘
 ```
 
+### YD-ESP32-S3 (2022-v1.3)
+
+| GPIO | Component              |
+|------|------------------------|
+| 4    | Pump relay             |
+| 5    | Inside valve           |
+| 6    | Outside valve          |
+| 7    | Tank valve             |
+| 8    | Inside auto switch     |
+| 9    | Inside manual switch   |
+| 10   | Outside manual switch  |
+| 11   | Outside auto switch    |
+
+### ESP32-S3 pin diagram
+
+```text
+                       YD-ESP32-S3 (2022-v1.3)
+                      ┌────────────────────────┐
+                GND ──┤○   [COM]    [USB]      ○├── 5Vin
+                GND ──┤○                      ○├── GND
+                 20 ──┤○                      ○├── 13
+                 21 ──┤○                      ○├── 12
+                 47 ──┤○                      ○├── IO11 · Outside auto sw
+                 48 ──┤○                      ○├── IO10 · Outside manual sw
+                 45 ──┤○   [RGB LED]          ○├── IO9  · Inside manual sw
+                  0 ──┤○                      ○├── 46
+                 35 ──┤○                      ○├── 3
+                 36 ──┤○   [BOOT]             ○├── IO8  · Inside auto sw
+                 37 ──┤○                      ○├── 18
+                 38 ──┤○   [RST]              ○├── 17
+                 39 ──┤○                      ○├── 16
+                 40 ──┤○                      ○├── 15
+                 41 ──┤○                      ○├── IO7  · Tank valve
+                 42 ──┤○                      ○├── IO6  · Outside valve
+                  2 ──┤○                      ○├── IO5  · Inside valve
+                  1 ──┤○                      ○├── IO4  · Pump relay
+         RX (IO44) ──┤○                      ○├── RST
+         TX (IO43) ──┤○                      ○├── 3V3
+                GND ──┤○                      ○├── 3V3
+                      └────────────────────────┘
+```
+
+> Avoid GPIO 0 (boot strapping), GPIO 19/20 (USB OTG), GPIO 46 (strapping pin), and GPIO 26–32 (flash/PSRAM).
+
+### ESP32-S3 platform differences
+
+| Concern          | RP2040 (WiFiNINA)             | ESP32-S3                              |
+|------------------|-------------------------------|---------------------------------------|
+| WiFi library     | `WiFiNINA`                    | Built-in `WiFi.h`                     |
+| Flash storage    | `WiFiStorage` (NINA flash)    | `LittleFS` (ESP32 internal flash)     |
+| HTTP server      | Manual `WiFiServer` loop      | `WebServer.h` with route handlers     |
+| PWM              | `analogWrite()` (RP2040)      | `analogWrite()` (Arduino core 3.x)    |
+| `WiFi.config()`  | `(ip, dns, gateway, subnet)`  | `(ip, gateway, subnet, dns)`          |
+
 ## Project Structure
 
 ```text
@@ -61,7 +122,7 @@ src/
 
 1. Initialise all output pins LOW (pump and valves off)
 2. Load saved schedules from the WiFiNINA module's onboard flash
-3. Connect to WiFi with a static IP (`192.168.1.200`)
+3. Connect to WiFi with a static IP (`192.168.1.200` on RP2040, `192.168.1.202` on ESP32-S3)
 4. Fetch the current time from `pool.ntp.org` via UDP and apply a UTC-6 offset
 5. Start the HTTP server on port 80
 
@@ -131,7 +192,7 @@ Both percentages are configurable per valve from the web interface and saved to 
 
 ### Web interface
 
-Accessible at `http://192.168.1.200` on the local network. Provides:
+Accessible at `http://192.168.1.200` (RP2040) or `http://192.168.1.202` (ESP32-S3) on the local network. Provides:
 
 * **Status table** — live state of pump, all three valves, all four switches, and active schedule
 * **Schedules** — view and edit up to 5 schedules (active flag, start time, duration); saved to flash on submit
