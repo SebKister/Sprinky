@@ -1,12 +1,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <LittleFS.h>
 
 #include "secrets.h"
 #include "config.h"
 #include "hardware.h"
 #include "ntp.h"
 #include "schedule.h"
+#include "eeprom_storage.h"
 #include "webserver.h"
 
 // --- Hardware Instances ---
@@ -34,10 +34,8 @@ void setup() {
   insideSwitch.begin(); outsideSwitch.begin();
   insideAutoSwitch.begin(); outsideAutoSwitch.begin();
 
-  // Flash storage (format on first boot if needed)
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed!");
-  }
+  // I2C EEPROM init
+  eepromInit();
 
   loadSchedules();
   loadValvePwm();

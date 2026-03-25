@@ -11,6 +11,9 @@
   const int PIN_SW_INSIDE       =  9;
   const int PIN_SW_OUTSIDE      = 10;
   const int PIN_SW_OUTSIDE_AUTO = 11; // Must be ON for schedule to water outside
+  // I2C EEPROM (AT24Cxx)
+  const int PIN_I2C_SDA = 21;
+  const int PIN_I2C_SCL = 2;
 #else
   // Arduino Nano RP2040 Connect
   const int PIN_PUMP            =  2;
