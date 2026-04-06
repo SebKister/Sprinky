@@ -88,7 +88,18 @@ static bool waitForByte(WiFiClient& client) {
   return true;
 }
 
+static void shutdownIrrigation() {
+  pumpActive = false;
+  digitalWrite(PIN_PUMP, LOW);
+  insideValve.turnOff();
+  outsideValve.turnOff();
+  tankValve.turnOff();
+  scheduleRunning = false;
+  Serial.println("OTA: irrigation shut down");
+}
+
 static void handleOTAUpload(WiFiClient& client, int contentLength) {
+  shutdownIrrigation();
   client.setTimeout(OTA_READ_TIMEOUT_MS / 1000);
 
   // Extract the multipart boundary from the first line of the body
