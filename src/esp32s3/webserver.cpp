@@ -104,7 +104,7 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
   size_t footerSize = boundary.length() + 8;
   size_t firmwareSize = (contentLength > (int)footerSize) ? contentLength - footerSize : 0;
 
-  if (firmwareSize == 0 || !Update.begin(UPDATE_SIZE_UNKNOWN)) {
+  if (firmwareSize == 0 || !Update.begin(firmwareSize)) {
     sendOTAResponse(client, false);
     return;
   }
@@ -116,13 +116,25 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
   while (remaining > 0 && client.connected()) {
     size_t toRead = (remaining < sizeof(buf)) ? remaining : sizeof(buf);
     size_t bytesRead = client.readBytes(buf, toRead);
-    if (bytesRead == 0) break;
+    if (bytesRead == 0) {
+      Serial.println("OTA: read timeout, aborting");
+      Update.abort();
+      sendOTAResponse(client, false);
+      return;
+    }
     if (Update.write(buf, bytesRead) != bytesRead) {
       Update.abort();
       sendOTAResponse(client, false);
       return;
     }
     remaining -= bytesRead;
+  }
+
+  if (remaining > 0) {
+    Serial.printf("OTA: incomplete upload (%u bytes missing), aborting\n", remaining);
+    Update.abort();
+    sendOTAResponse(client, false);
+    return;
   }
 
   // Drain remaining body (boundary footer)
@@ -137,7 +149,7 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
     }
   }
 
-  bool success = Update.end(true);
+  bool success = Update.end();
   sendOTAResponse(client, success);
 
   if (success) {
