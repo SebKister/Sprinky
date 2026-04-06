@@ -252,6 +252,7 @@ void handleClient() {
           client.print("<p>Current System Time: ");
           client.print(timeStrDisp);
           client.println(" (UTC-6)</p>");
+          client.println("<p>Firmware: v" FIRMWARE_VERSION "</p>");
 
           client.println("<h3>Status</h3>");
           client.println("<table><tr><th>Component</th><th>State</th></tr>");

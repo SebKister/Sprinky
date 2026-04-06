@@ -1,5 +1,7 @@
 #pragma once
 
+#define FIRMWARE_VERSION "1.0.0"
+
 // --- Hardware Pins ---
 #ifdef ARDUINO_ARCH_ESP32
   // ESP32-S3-WROOM-1
