@@ -254,6 +254,25 @@ void handleClient() {
           client.println(" (UTC-6)</p>");
           client.println("<p>Firmware: v" FIRMWARE_VERSION "</p>");
 
+          if (formSubmitted) client.println("<p style='color:green'>Schedules Updated &amp; Saved to EEPROM!</p>");
+
+          client.println("<h3>Schedules</h3><p>Automatically alternates Tank -> Inside (5min) -> Outside (5min).</p>");
+          client.println("<form action='/save' method='GET'>");
+          client.println("<table><tr><th>ID</th><th>Active</th><th>Start Time (HH:MM)</th><th>Duration (Mins)</th></tr>");
+
+          for (int i = 0; i < MAX_SCHEDULES; i++) {
+            client.print("<tr><td>"); client.print(i); client.print("</td>");
+            client.print("<td><input type='checkbox' name='act"); client.print(i); client.print("' value='1' ");
+            if (schedules[i].active) client.print("checked");
+            client.print("></td>");
+            char timeStr[6];
+            sprintf(timeStr, "%02d:%02d", schedules[i].startHour, schedules[i].startMinute);
+            client.print("<td><input type='time' name='time"); client.print(i); client.print("' value='"); client.print(timeStr); client.print("'></td>");
+            client.print("<td><input type='number' name='dur"); client.print(i); client.print("' value='"); client.print(schedules[i].durationMinutes); client.print("' min='0' max='300'></td>");
+            client.println("</tr>");
+          }
+          client.println("</table><br><input type='submit' value='Save'></form>");
+
           client.println("<h3>Status</h3>");
           client.println("<table><tr><th>Component</th><th>State</th></tr>");
 
@@ -281,25 +300,6 @@ void handleClient() {
             client.println("<tr><td>Schedule</td><td style='color:gray'>Idle</td></tr>");
           }
           client.println("</table>");
-
-          if (formSubmitted) client.println("<p style='color:green'>Schedules Updated &amp; Saved to EEPROM!</p>");
-
-          client.println("<h3>Schedules</h3><p>Automatically alternates Tank -> Inside (5min) -> Outside (5min).</p>");
-          client.println("<form action='/save' method='GET'>");
-          client.println("<table><tr><th>ID</th><th>Active</th><th>Start Time (HH:MM)</th><th>Duration (Mins)</th></tr>");
-
-          for (int i = 0; i < MAX_SCHEDULES; i++) {
-            client.print("<tr><td>"); client.print(i); client.print("</td>");
-            client.print("<td><input type='checkbox' name='act"); client.print(i); client.print("' value='1' ");
-            if (schedules[i].active) client.print("checked");
-            client.print("></td>");
-            char timeStr[6];
-            sprintf(timeStr, "%02d:%02d", schedules[i].startHour, schedules[i].startMinute);
-            client.print("<td><input type='time' name='time"); client.print(i); client.print("' value='"); client.print(timeStr); client.print("'></td>");
-            client.print("<td><input type='number' name='dur"); client.print(i); client.print("' value='"); client.print(schedules[i].durationMinutes); client.print("' min='0' max='300'></td>");
-            client.println("</tr>");
-          }
-          client.println("</table><br><input type='submit' value='Save'></form>");
 
           if (pwmSubmitted) client.println("<p style='color:green'>Valve PWM Saved!</p>");
 
