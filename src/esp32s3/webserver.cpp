@@ -1,10 +1,12 @@
 #include <WiFi.h>
 #include <Update.h>
+#include <base64.h>
 #include "webserver.h"
 #include "hardware.h"
 #include "schedule.h"
 #include "ntp.h"
 #include "config.h"
+#include "secrets.h"
 
 extern Valve insideValve;
 extern Valve outsideValve;
@@ -39,6 +41,21 @@ static void printHTMLHeader(WiFiClient& client) {
 
 static void printHTMLFooter(WiFiClient& client) {
   client.println("</body></html>");
+}
+
+static void sendAuth401(WiFiClient& client) {
+  client.println("HTTP/1.1 401 Unauthorized");
+  client.println("WWW-Authenticate: Basic realm=\"Sprinky OTA\"");
+  client.println("Content-type:text/html");
+  client.println("Connection: close");
+  client.println();
+  client.println("<!DOCTYPE html><html><body><h3>401 Unauthorized</h3></body></html>");
+}
+
+static bool checkOTAAuth(const String& authHeader) {
+  if (!authHeader.startsWith("Basic ")) return false;
+  String expected = base64::encode(String(OTA_USER) + ":" + OTA_PASS);
+  return authHeader.substring(6) == expected;
 }
 
 static void sendOTAResponse(WiFiClient& client, bool success) {
@@ -166,6 +183,7 @@ void handleClient() {
 
   String reqLine = "";
   String firstLine = "";
+  String authHeader = "";
   bool formSubmitted = false;
   bool pwmSubmitted  = false;
   int contentLength = 0;
@@ -183,25 +201,34 @@ void handleClient() {
         if (reqLine.startsWith("Content-Length: ")) {
           contentLength = reqLine.substring(16).toInt();
         }
+        if (reqLine.startsWith("Authorization: ")) {
+          authHeader = reqLine.substring(15);
+        }
 
         if (reqLine.length() == 0) {
-          // Handle GET /update — show firmware upload form
-          if (firstLine.startsWith("GET /update")) {
-            printHTMLHeader(client);
-            client.println("<h3>Firmware Update</h3>");
-            client.println("<form method='POST' action='/update' enctype='multipart/form-data'>");
-            client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
-            client.println("<input type='submit' value='Upload &amp; Flash'>");
-            client.println("</form>");
-            client.println("<p><a href='/'>Back to Status</a></p>");
-            printHTMLFooter(client);
-            break;
-          }
+          // Handle /update routes — require Basic Auth
+          if (firstLine.startsWith("GET /update") || firstLine.startsWith("POST /update")) {
+            if (!checkOTAAuth(authHeader)) {
+              sendAuth401(client);
+              break;
+            }
 
-          // Handle POST /update — receive and flash firmware
-          if (firstLine.startsWith("POST /update") && contentLength > 0) {
-            handleOTAUpload(client, contentLength);
-            break;
+            if (firstLine.startsWith("GET /update")) {
+              printHTMLHeader(client);
+              client.println("<h3>Firmware Update</h3>");
+              client.println("<form method='POST' action='/update' enctype='multipart/form-data'>");
+              client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
+              client.println("<input type='submit' value='Upload &amp; Flash'>");
+              client.println("</form>");
+              client.println("<p><a href='/'>Back to Status</a></p>");
+              printHTMLFooter(client);
+              break;
+            }
+
+            if (contentLength > 0) {
+              handleOTAUpload(client, contentLength);
+              break;
+            }
           }
 
           printHTMLHeader(client);

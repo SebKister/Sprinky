@@ -5,4 +5,8 @@
 #define WIFI_SSID "ArianesLine"
 #define WIFI_PASS "CufkTis6"
 
+// OTA update credentials (HTTP Basic Auth)
+#define OTA_USER "admin"
+#define OTA_PASS "sprinky"
+
 #endif
