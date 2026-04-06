@@ -60,11 +60,25 @@ static void sendOTAResponse(WiFiClient& client, bool success) {
   }
 }
 
+static const unsigned long OTA_READ_TIMEOUT_MS = 10000;
+
+static bool waitForByte(WiFiClient& client) {
+  unsigned long start = millis();
+  while (!client.available()) {
+    if (!client.connected() || millis() - start > OTA_READ_TIMEOUT_MS) return false;
+    delay(1);
+  }
+  return true;
+}
+
 static void handleOTAUpload(WiFiClient& client, int contentLength) {
+  client.setTimeout(OTA_READ_TIMEOUT_MS / 1000);
+
   // Extract the multipart boundary from the first line of the body
   // The body starts with: --boundary\r\n
   String boundary = "";
   while (client.connected()) {
+    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
     char c = client.read();
     contentLength--;
     if (c == '\n') break;
@@ -74,6 +88,7 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
   // Skip part headers (Content-Disposition, Content-Type, etc.) until blank line
   String line = "";
   while (client.connected()) {
+    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
     char c = client.read();
     contentLength--;
     if (c == '\n') {
@@ -111,9 +126,15 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
   }
 
   // Drain remaining body (boundary footer)
+  unsigned long drainStart = millis();
   while (contentLength > (int)firmwareSize && client.connected()) {
-    if (client.available()) client.read();
-    else break;
+    if (client.available()) {
+      client.read();
+    } else if (millis() - drainStart > OTA_READ_TIMEOUT_MS) {
+      break;
+    } else {
+      delay(1);
+    }
   }
 
   bool success = Update.end(true);
