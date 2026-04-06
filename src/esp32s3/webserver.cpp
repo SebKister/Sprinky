@@ -55,7 +55,7 @@ static void sendOTAResponse(WiFiClient& client, bool success) {
   } else {
     client.println("<!DOCTYPE html><html><body><h3>Update Failed</h3>");
     client.print("<p>Error: ");
-    Update.printError(Serial);
+    Update.printError(client);
     client.println("</p><p><a href='/update'>Try Again</a></p></body></html>");
   }
 }
