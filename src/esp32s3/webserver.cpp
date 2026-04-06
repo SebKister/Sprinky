@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <Update.h>
 #include "webserver.h"
 #include "hardware.h"
 #include "schedule.h"
@@ -40,13 +41,101 @@ static void printHTMLFooter(WiFiClient& client) {
   client.println("</body></html>");
 }
 
+static void sendOTAResponse(WiFiClient& client, bool success) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html");
+  client.println("Connection: close");
+  client.println();
+  if (success) {
+    client.println("<!DOCTYPE html><html><body>");
+    client.println("<h3>Update Successful!</h3>");
+    client.println("<p>Rebooting... page will reload in 10 seconds.</p>");
+    client.println("<script>setTimeout(function(){window.location='/';},10000);</script>");
+    client.println("</body></html>");
+  } else {
+    client.println("<!DOCTYPE html><html><body><h3>Update Failed</h3>");
+    client.print("<p>Error: ");
+    Update.printError(Serial);
+    client.println("</p><p><a href='/update'>Try Again</a></p></body></html>");
+  }
+}
+
+static void handleOTAUpload(WiFiClient& client, int contentLength) {
+  // Extract the multipart boundary from the first line of the body
+  // The body starts with: --boundary\r\n
+  String boundary = "";
+  while (client.connected()) {
+    char c = client.read();
+    contentLength--;
+    if (c == '\n') break;
+    if (c != '\r') boundary += c;
+  }
+
+  // Skip part headers (Content-Disposition, Content-Type, etc.) until blank line
+  String line = "";
+  while (client.connected()) {
+    char c = client.read();
+    contentLength--;
+    if (c == '\n') {
+      if (line.length() == 0 || line == "\r") break;
+      line = "";
+    } else {
+      line += c;
+    }
+  }
+
+  // Remaining contentLength = binary data + \r\n + boundary footer
+  // Footer is: \r\n--boundary--\r\n = boundary.length() + 8
+  size_t footerSize = boundary.length() + 8;
+  size_t firmwareSize = (contentLength > (int)footerSize) ? contentLength - footerSize : 0;
+
+  if (firmwareSize == 0 || !Update.begin(UPDATE_SIZE_UNKNOWN)) {
+    sendOTAResponse(client, false);
+    return;
+  }
+
+  Serial.printf("OTA: receiving %u bytes...\n", firmwareSize);
+
+  uint8_t buf[1024];
+  size_t remaining = firmwareSize;
+  while (remaining > 0 && client.connected()) {
+    size_t toRead = (remaining < sizeof(buf)) ? remaining : sizeof(buf);
+    size_t bytesRead = client.readBytes(buf, toRead);
+    if (bytesRead == 0) break;
+    if (Update.write(buf, bytesRead) != bytesRead) {
+      Update.abort();
+      sendOTAResponse(client, false);
+      return;
+    }
+    remaining -= bytesRead;
+  }
+
+  // Drain remaining body (boundary footer)
+  while (contentLength > (int)firmwareSize && client.connected()) {
+    if (client.available()) client.read();
+    else break;
+  }
+
+  bool success = Update.end(true);
+  sendOTAResponse(client, success);
+
+  if (success) {
+    Serial.println("OTA web update successful, rebooting...");
+    client.flush();
+    delay(500);
+    ESP.restart();
+  }
+}
+
 void handleClient() {
   WiFiClient client = server.available();
   if (!client) return;
 
   String reqLine = "";
+  String firstLine = "";
   bool formSubmitted = false;
   bool pwmSubmitted  = false;
+  int contentLength = 0;
 
   while (client.connected()) {
     if (client.available()) {
@@ -55,7 +144,33 @@ void handleClient() {
       if (c != '\n' && c != '\r') {
         reqLine += c;
       } else if (c == '\n') {
+        if (firstLine.length() == 0 && reqLine.length() > 0) {
+          firstLine = reqLine;
+        }
+        if (reqLine.startsWith("Content-Length: ")) {
+          contentLength = reqLine.substring(16).toInt();
+        }
+
         if (reqLine.length() == 0) {
+          // Handle GET /update — show firmware upload form
+          if (firstLine.startsWith("GET /update")) {
+            printHTMLHeader(client);
+            client.println("<h3>Firmware Update</h3>");
+            client.println("<form method='POST' action='/update' enctype='multipart/form-data'>");
+            client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
+            client.println("<input type='submit' value='Upload &amp; Flash'>");
+            client.println("</form>");
+            client.println("<p><a href='/'>Back to Status</a></p>");
+            printHTMLFooter(client);
+            break;
+          }
+
+          // Handle POST /update — receive and flash firmware
+          if (firstLine.startsWith("POST /update") && contentLength > 0) {
+            handleOTAUpload(client, contentLength);
+            break;
+          }
+
           printHTMLHeader(client);
 
           unsigned long e = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
@@ -134,6 +249,7 @@ void handleClient() {
 
           client.println("</table><br><input type='submit' value='Save'></form>");
 
+          client.println("<hr><p><a href='/update'>Firmware Update</a></p>");
           printHTMLFooter(client);
           break;
         } else {

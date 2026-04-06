@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 
 #include "secrets.h"
 #include "config.h"
@@ -72,10 +73,24 @@ void setup() {
   }
   lastEpochUpdateMillis = millis();
 
+  // ArduinoOTA for PlatformIO network uploads
+  ArduinoOTA.setHostname("sprinky");
+  ArduinoOTA.onStart([]() {
+    Serial.println("OTA update starting...");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nOTA update complete.");
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA Error [%u]\n", error);
+  });
+  ArduinoOTA.begin();
+
   webserverBegin();
 }
 
 void loop() {
+  ArduinoOTA.handle();
   manageSchedules();
   handleClient();
 
