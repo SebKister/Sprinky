@@ -1,9 +1,12 @@
 #include <WiFi.h>
+#include <Update.h>
+#include <base64.h>
 #include "webserver.h"
 #include "hardware.h"
 #include "schedule.h"
 #include "ntp.h"
 #include "config.h"
+#include "secrets.h"
 
 extern Valve insideValve;
 extern Valve outsideValve;
@@ -40,13 +43,161 @@ static void printHTMLFooter(WiFiClient& client) {
   client.println("</body></html>");
 }
 
+static void sendAuth401(WiFiClient& client) {
+  client.println("HTTP/1.1 401 Unauthorized");
+  client.println("WWW-Authenticate: Basic realm=\"Sprinky OTA\"");
+  client.println("Content-type:text/html");
+  client.println("Connection: close");
+  client.println();
+  client.println("<!DOCTYPE html><html><body><h3>401 Unauthorized</h3></body></html>");
+}
+
+static bool checkOTAAuth(const String& authHeader) {
+  if (!authHeader.startsWith("Basic ")) return false;
+  String expected = base64::encode(String(OTA_USER) + ":" + OTA_PASS);
+  return authHeader.substring(6) == expected;
+}
+
+static void sendOTAResponse(WiFiClient& client, bool success) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html");
+  client.println("Connection: close");
+  client.println();
+  if (success) {
+    client.println("<!DOCTYPE html><html><body>");
+    client.println("<h3>Update Successful!</h3>");
+    client.println("<p>Rebooting... page will reload in 10 seconds.</p>");
+    client.println("<script>setTimeout(function(){window.location='/';},10000);</script>");
+    client.println("</body></html>");
+  } else {
+    client.println("<!DOCTYPE html><html><body><h3>Update Failed</h3>");
+    client.print("<p>Error: ");
+    Update.printError(client);
+    client.println("</p><p><a href='/update'>Try Again</a></p></body></html>");
+  }
+}
+
+static const unsigned long OTA_READ_TIMEOUT_MS = 10000;
+
+static bool waitForByte(WiFiClient& client) {
+  unsigned long start = millis();
+  while (!client.available()) {
+    if (!client.connected() || millis() - start > OTA_READ_TIMEOUT_MS) return false;
+    delay(1);
+  }
+  return true;
+}
+
+static void shutdownIrrigation() {
+  pumpActive = false;
+  digitalWrite(PIN_PUMP, LOW);
+  insideValve.turnOff();
+  outsideValve.turnOff();
+  tankValve.turnOff();
+  scheduleRunning = false;
+  Serial.println("OTA: irrigation shut down");
+}
+
+static void handleOTAUpload(WiFiClient& client, int contentLength) {
+  shutdownIrrigation();
+  client.setTimeout(OTA_READ_TIMEOUT_MS / 1000);
+
+  // Extract the multipart boundary from the first line of the body
+  // The body starts with: --boundary\r\n
+  String boundary = "";
+  while (client.connected()) {
+    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
+    char c = client.read();
+    contentLength--;
+    if (c == '\n') break;
+    if (c != '\r') boundary += c;
+  }
+
+  // Skip part headers (Content-Disposition, Content-Type, etc.) until blank line
+  String line = "";
+  while (client.connected()) {
+    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
+    char c = client.read();
+    contentLength--;
+    if (c == '\n') {
+      if (line.length() == 0 || line == "\r") break;
+      line = "";
+    } else {
+      line += c;
+    }
+  }
+
+  // Remaining contentLength = binary data + \r\n + boundary footer
+  // Footer is: \r\n--boundary--\r\n = boundary.length() + 8
+  size_t footerSize = boundary.length() + 8;
+  size_t firmwareSize = (contentLength > (int)footerSize) ? contentLength - footerSize : 0;
+
+  if (firmwareSize == 0 || !Update.begin(firmwareSize)) {
+    sendOTAResponse(client, false);
+    return;
+  }
+
+  Serial.printf("OTA: receiving %u bytes...\n", firmwareSize);
+
+  uint8_t buf[1024];
+  size_t remaining = firmwareSize;
+  while (remaining > 0 && client.connected()) {
+    size_t toRead = (remaining < sizeof(buf)) ? remaining : sizeof(buf);
+    size_t bytesRead = client.readBytes(buf, toRead);
+    if (bytesRead == 0) {
+      Serial.println("OTA: read timeout, aborting");
+      Update.abort();
+      sendOTAResponse(client, false);
+      return;
+    }
+    if (Update.write(buf, bytesRead) != bytesRead) {
+      Update.abort();
+      sendOTAResponse(client, false);
+      return;
+    }
+    remaining -= bytesRead;
+  }
+
+  if (remaining > 0) {
+    Serial.printf("OTA: incomplete upload (%u bytes missing), aborting\n", remaining);
+    Update.abort();
+    sendOTAResponse(client, false);
+    return;
+  }
+
+  // Drain remaining body (boundary footer)
+  unsigned long drainStart = millis();
+  while (contentLength > (int)firmwareSize && client.connected()) {
+    if (client.available()) {
+      client.read();
+    } else if (millis() - drainStart > OTA_READ_TIMEOUT_MS) {
+      break;
+    } else {
+      delay(1);
+    }
+  }
+
+  bool success = Update.end();
+  sendOTAResponse(client, success);
+
+  if (success) {
+    Serial.println("OTA web update successful, rebooting...");
+    client.flush();
+    delay(500);
+    ESP.restart();
+  }
+}
+
 void handleClient() {
   WiFiClient client = server.available();
   if (!client) return;
 
   String reqLine = "";
+  String firstLine = "";
+  String authHeader = "";
   bool formSubmitted = false;
   bool pwmSubmitted  = false;
+  int contentLength = 0;
 
   while (client.connected()) {
     if (client.available()) {
@@ -55,7 +206,42 @@ void handleClient() {
       if (c != '\n' && c != '\r') {
         reqLine += c;
       } else if (c == '\n') {
+        if (firstLine.length() == 0 && reqLine.length() > 0) {
+          firstLine = reqLine;
+        }
+        if (reqLine.startsWith("Content-Length: ")) {
+          contentLength = reqLine.substring(16).toInt();
+        }
+        if (reqLine.startsWith("Authorization: ")) {
+          authHeader = reqLine.substring(15);
+        }
+
         if (reqLine.length() == 0) {
+          // Handle /update routes — require Basic Auth
+          if (firstLine.startsWith("GET /update") || firstLine.startsWith("POST /update")) {
+            if (!checkOTAAuth(authHeader)) {
+              sendAuth401(client);
+              break;
+            }
+
+            if (firstLine.startsWith("GET /update")) {
+              printHTMLHeader(client);
+              client.println("<h3>Firmware Update</h3>");
+              client.println("<form method='POST' action='/update' enctype='multipart/form-data'>");
+              client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
+              client.println("<input type='submit' value='Upload &amp; Flash'>");
+              client.println("</form>");
+              client.println("<p><a href='/'>Back to Status</a></p>");
+              printHTMLFooter(client);
+              break;
+            }
+
+            if (contentLength > 0) {
+              handleOTAUpload(client, contentLength);
+              break;
+            }
+          }
+
           printHTMLHeader(client);
 
           unsigned long e = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
@@ -134,6 +320,7 @@ void handleClient() {
 
           client.println("</table><br><input type='submit' value='Save'></form>");
 
+          client.println("<hr><p><a href='/update'>Firmware Update</a></p>");
           printHTMLFooter(client);
           break;
         } else {
