@@ -128,8 +128,8 @@ static void handleOTAUpload(WiFiClient& client, int contentLength) {
   }
 
   // Remaining contentLength = binary data + \r\n + boundary footer
-  // Footer is: \r\n--boundary--\r\n = boundary.length() + 8
-  size_t footerSize = boundary.length() + 8;
+  // boundary already contains the leading "--", so footer "\r\n--boundary--\r\n" = boundary.length() + 6
+  size_t footerSize = boundary.length() + 6;
   size_t firmwareSize = (contentLength > (int)footerSize) ? contentLength - footerSize : 0;
 
   if (firmwareSize == 0 || !Update.begin(firmwareSize)) {
