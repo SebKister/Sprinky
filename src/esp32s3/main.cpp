@@ -22,6 +22,10 @@ Switch outsideAutoSwitch(PIN_SW_OUTSIDE_AUTO);
 
 // --- Pump State ---
 bool pumpActive = false;
+
+// --- Web Toggle State ---
+bool webReqInside  = false;
+bool webReqOutside = false;
 unsigned long valveActivationTime = 0;
 bool waitingForPump = false;
 
@@ -94,8 +98,8 @@ void loop() {
   manageSchedules();
   handleClient();
 
-  bool reqInside   = insideSwitch.isOn();
-  bool reqOutside  = outsideSwitch.isOn();
+  bool reqInside   = insideSwitch.isOn()  || webReqInside;
+  bool reqOutside  = outsideSwitch.isOn() || webReqOutside;
   bool autoInside  = insideAutoSwitch.isOn();
   bool autoOutside = outsideAutoSwitch.isOn();
 

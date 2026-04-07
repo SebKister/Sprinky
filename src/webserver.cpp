@@ -69,6 +69,21 @@ void handleClient() {
           client.print(timeStrDisp);
           client.println(" (UTC-6)</p>");
 
+          // --- Manual Zone Toggle Buttons ---
+          client.println("<h3>Manual Zone Control</h3>");
+          client.println("<p style='margin-bottom:8px'>");
+          if (webReqInside) {
+            client.println("<a href='/zone?inside=0' style='display:inline-block;padding:12px 24px;margin-right:12px;background:#4CAF50;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Inside: ON</a>");
+          } else {
+            client.println("<a href='/zone?inside=1' style='display:inline-block;padding:12px 24px;margin-right:12px;background:#aaa;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Inside: OFF</a>");
+          }
+          if (webReqOutside) {
+            client.println("<a href='/zone?outside=0' style='display:inline-block;padding:12px 24px;background:#4CAF50;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Outside: ON</a>");
+          } else {
+            client.println("<a href='/zone?outside=1' style='display:inline-block;padding:12px 24px;background:#aaa;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Outside: OFF</a>");
+          }
+          client.println("</p>");
+
           // --- Hardware status ---
           client.println("<h3>Status</h3>");
           client.println("<table><tr><th>Component</th><th>State</th></tr>");
@@ -196,6 +211,23 @@ void handleClient() {
             }
 
             saveSchedules();
+          } else if (reqLine.startsWith("GET /zone?")) {
+            int httpPos   = reqLine.indexOf(" HTTP/", 10);
+            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
+            int searchPos = 10;
+            while (searchPos < paramsEnd) {
+              int nextAmp = reqLine.indexOf('&', searchPos);
+              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
+              String pair = reqLine.substring(searchPos, endStr);
+              int eq = pair.indexOf('=');
+              if (eq > 0) {
+                String key = pair.substring(0, eq);
+                int    val = pair.substring(eq + 1).toInt();
+                if      (key == "inside")  webReqInside  = (val != 0);
+                else if (key == "outside") webReqOutside = (val != 0);
+              }
+              searchPos = endStr + 1;
+            }
           } else if (reqLine.startsWith("GET /savepwm?")) {
             pwmSubmitted = true;
 
