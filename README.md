@@ -1,49 +1,8 @@
 # Sprinky
 
-Firmware for a sprinkler control system supporting two targets:
-
-| PlatformIO env      | Board                        |
-|---------------------|------------------------------|
-| `nanorp2040connect` | Arduino Nano RP2040 Connect  |
-| `esp32s3`           | YD-ESP32-S3 (2022-v1.3)      |
+Firmware for a sprinkler control system running on the YD-ESP32-S3 (2022-v1.3).
 
 ## Hardware Setup
-
-### Arduino Nano RP2040 Connect
-
-| Pin | Component              |
-|-----|------------------------|
-| 2   | Pump relay             |
-| 3   | Inside valve           |
-| 4   | Outside valve          |
-| 5   | Tank valve             |
-| 14  | Inside auto switch     |
-| 15  | Inside manual switch   |
-| 16  | Outside manual switch  |
-| 17  | Outside auto switch    |
-
-### Pin diagram
-
-```text
-                          Arduino Nano RP2040 Connect
-                          ┌────────────────────────┐
-                    D13 ──┤○                      ○├── D12
-                    3V3 ──┤○                      ○├── D11
-                   AREF ──┤○                      ○├── D10
-    D14 · Inside auto sw ──┤○                      ○├── D9
-   D15 · Inside manual sw ──┤○                      ○├── D8
-  D16 · Outside manual sw ──┤○                      ○├── D7
-   D17 · Outside auto sw ──┤○                      ○├── D6
-                  A4/D18 ──┤○                      ○├── D5 · Tank valve
-                  A5/D19 ──┤○                      ○├── D4 · Outside valve
-                      A6 ──┤○                      ○├── D3 · Inside valve
-                      A7 ──┤○                      ○├── D2 · Pump relay
-                      5V ──┤○                      ○├── GND
-                     RST ──┤○                      ○├── RST
-                     GND ──┤○                      ○├── TX
-                     VIN ──┤○                      ○├── RX
-                          └────────────────────────┘
-```
 
 ### YD-ESP32-S3 (2022-v1.3)
 
@@ -60,7 +19,7 @@ Firmware for a sprinkler control system supporting two targets:
 | 21   | I2C SDA (EEPROM)       |
 | 2    | I2C SCL (EEPROM)       |
 
-### ESP32-S3 pin diagram
+### Pin diagram
 
 ```text
                        YD-ESP32-S3 (2022-v1.3)
@@ -91,7 +50,7 @@ Firmware for a sprinkler control system supporting two targets:
 
 > Avoid GPIO 0 (boot strapping), GPIO 19/20 (USB OTG), GPIO 46 (strapping pin), and GPIO 26–32 (flash/PSRAM).
 
-### I2C EEPROM wiring (ESP32-S3)
+### I2C EEPROM wiring
 
 EEPROM: **Microchip 24AA512** (512 Kbit / 64 KB, 128-byte pages, 400 kHz Fast mode).
 
@@ -104,16 +63,6 @@ EEPROM: **Microchip 24AA512** (512 Kbit / 64 KB, 128-byte pages, 400 kHz Fast mo
 | A0, A1, A2 | GND                 | I2C address → 0x50             |
 | WP         | GND                 | Write-protect disabled         |
 
-### ESP32-S3 platform differences
-
-| Concern          | RP2040 (WiFiNINA)             | ESP32-S3                              |
-|------------------|-------------------------------|---------------------------------------|
-| WiFi library     | `WiFiNINA`                    | Built-in `WiFi.h`                     |
-| Persistent store | `WiFiStorage` (NINA flash)    | I2C EEPROM via `Wire.h`               |
-| HTTP server      | Manual `WiFiServer` loop      | Manual `WiFiServer` loop              |
-| PWM              | `analogWrite()` (RP2040)      | `analogWrite()` (Arduino core 3.x)    |
-| `WiFi.config()`  | `(ip, dns, gateway, subnet)`  | `(ip, gateway, subnet, dns)`          |
-
 ## Project Structure
 
 ```text
@@ -122,20 +71,14 @@ include/
   hardware.h        — Valve and Switch classes
   ntp.h             — NTP time state (currentEpoch, lastEpochUpdateMillis) and fetchNTPTime() declaration
   schedule.h        — Schedule struct, schedule state globals, and function declarations
-  eeprom_storage.h  — I2C EEPROM load/save API (ESP32-S3 only)
+  eeprom_storage.h  — I2C EEPROM load/save API
   webserver.h       — Web server function declarations
-src/
-  ntp.cpp           — NTP time sync over UDP (pool.ntp.org); retries every hour, or every 10s if not yet synced
-  schedule.cpp      — Schedule load/save (WiFiNINA flash) and manageSchedules()
-  webserver.cpp     — HTTP server and HTML page rendering
-  main.cpp          — setup(), loop(), hardware instances, pump control logic
-  secrets.h         — WiFi credentials (not committed)
 src/esp32s3/
   eeprom_storage.cpp — Wire-based I2C EEPROM driver (AT24Cxx page-write + sequential read)
   schedule.cpp      — Delegates load/save to eeprom_storage and runs manageSchedules()
-  webserver.cpp     — ESP32-S3 HTTP server and HTML page rendering
-  main.cpp          — ESP32-S3 setup(), loop(), hardware instances, pump control logic
-  ntp.cpp           — ESP32-S3 NTP implementation
+  webserver.cpp     — HTTP server and HTML page rendering
+  main.cpp          — setup(), loop(), hardware instances, pump control logic
+  ntp.cpp           — NTP time sync over UDP
 ```
 
 ## Logic Overview
@@ -144,16 +87,22 @@ src/esp32s3/
 
 1. Initialise all output pins LOW (pump and valves off)
 2. Initialise I2C and load saved schedules and valve PWM settings from external EEPROM
-3. Connect to WiFi with a static IP (`192.168.1.200` on RP2040, `192.168.1.202` on ESP32-S3)
+3. Connect to WiFi with a static IP (`192.168.1.202`)
 4. Fetch the current time from `pool.ntp.org` via UDP and apply a UTC-6 offset
 5. Start the HTTP server on port 80
 
-### Manual watering (physical switches)
+### Manual watering
+
+**Physical switches:**
 
 **Inside switch (pin 9)**: held ON → waters inside zone
 **Outside switch (pin 10)**: held ON → waters outside zone
 
 Manual switches work at any time and are independent of schedules or auto switches.
+
+**Web interface toggles:**
+
+The web page provides Inside and Outside toggle buttons under **Manual Zone Control**. These work alongside the physical switches — either can activate a zone independently.
 
 ### Scheduled watering
 
@@ -226,8 +175,9 @@ If the magic marker is absent on first boot, all schedules default to inactive a
 
 ### Web interface
 
-Accessible at `http://192.168.1.200` (RP2040) or `http://192.168.1.202` (ESP32-S3) on the local network. Provides:
+Accessible at `http://192.168.1.202` on the local network. Provides:
 
+* **Manual Zone Control** — toggle buttons to turn inside/outside zones on or off from the browser
 * **Status table** — live state of pump, all three valves, all four switches, and active schedule
 * **Schedules** — view and edit up to 5 schedules (active flag, start time, duration); saved to EEPROM on submit
 * **Valve PWM %** — set On % and Hold % independently for each valve; applied immediately and saved to EEPROM
