@@ -12,6 +12,7 @@
 #define ADDR_MAGIC         0x0000  // 2 bytes: validity marker
 #define ADDR_SCHEDULES     0x0002  // sizeof(Schedule) * MAX_SCHEDULES bytes
 #define ADDR_VALVEPWM      (ADDR_SCHEDULES + sizeof(Schedule) * MAX_SCHEDULES)
+#define ADDR_PHASE_MINS    (ADDR_VALVEPWM + sizeof(valvePwm))  // 2 ints: insidePhaseMins, outsidePhaseMins
 
 static const uint8_t MAGIC_BYTES[2] = {0xAB, 0xCD};
 
@@ -91,4 +92,18 @@ void eepromLoadValvePwm() {
 void eepromSaveValvePwm() {
   eepromWrite(ADDR_MAGIC,    MAGIC_BYTES, 2);
   eepromWrite(ADDR_VALVEPWM, (uint8_t*)valvePwm, sizeof(valvePwm));
+}
+
+void eepromLoadPhaseMins() {
+  if (!eepromIsValid()) return;  // keep defaults
+  int vals[2];
+  eepromRead(ADDR_PHASE_MINS, (uint8_t*)vals, sizeof(vals));
+  if (vals[0] >= 1 && vals[0] <= 60) insidePhaseMins  = vals[0];
+  if (vals[1] >= 1 && vals[1] <= 60) outsidePhaseMins = vals[1];
+}
+
+void eepromSavePhaseMins() {
+  int vals[2] = {insidePhaseMins, outsidePhaseMins};
+  eepromWrite(ADDR_MAGIC,      MAGIC_BYTES, 2);
+  eepromWrite(ADDR_PHASE_MINS, (uint8_t*)vals, sizeof(vals));
 }
