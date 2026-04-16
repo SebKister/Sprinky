@@ -40,11 +40,6 @@ static bool checkOTAAuth(AsyncWebServerRequest* request) {
   return request->header("Authorization") == expected;
 }
 
-static String parseQueryString(AsyncWebServerRequest* request, const char* name) {
-  if (request->hasParam(name)) return request->getParam(name)->value();
-  return "";
-}
-
 // ---------------------------------------------------------------------------
 // HTML page
 // ---------------------------------------------------------------------------
