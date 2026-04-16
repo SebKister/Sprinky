@@ -256,7 +256,9 @@ void handleClient() {
 
           if (formSubmitted) client.println("<p style='color:green'>Schedules Updated &amp; Saved to EEPROM!</p>");
 
-          client.println("<h3>Schedules</h3><p>Automatically alternates Tank -> Inside (5min) -> Outside (5min).</p>");
+          char phaseDesc[64];
+          snprintf(phaseDesc, sizeof(phaseDesc), "Automatically alternates Tank -> Inside (%dmin) -> Outside (%dmin).", insidePhaseMins, outsidePhaseMins);
+          client.print("<h3>Schedules</h3><p>"); client.print(phaseDesc); client.println("</p>");
           client.println("<form action='/save' method='GET'>");
           client.println("<table><tr><th>ID</th><th>Active</th><th>Start Time (HH:MM)</th><th>Duration (Mins)</th></tr>");
 
@@ -271,6 +273,17 @@ void handleClient() {
             client.print("<td><input type='number' name='dur"); client.print(i); client.print("' value='"); client.print(schedules[i].durationMinutes); client.print("' min='0' max='300'></td>");
             client.println("</tr>");
           }
+          client.println("</table><br><input type='submit' value='Save'></form>");
+
+          client.println("<h3>Auto Phase Durations</h3>");
+          client.println("<form action='/savephase' method='GET'>");
+          client.println("<table><tr><th>Zone</th><th>Duration (min)</th></tr>");
+          client.print("<tr><td>Inside</td><td><input type='number' name='ip' value='");
+          client.print(insidePhaseMins);
+          client.println("' min='1' max='60'></td></tr>");
+          client.print("<tr><td>Outside</td><td><input type='number' name='op' value='");
+          client.print(outsidePhaseMins);
+          client.println("' min='1' max='60'></td></tr>");
           client.println("</table><br><input type='submit' value='Save'></form>");
 
           client.println("<h3>Manual Zone Control</h3>");
@@ -399,6 +412,25 @@ void handleClient() {
               }
               searchPos = endStr + 1;
             }
+          } else if (reqLine.startsWith("GET /savephase?")) {
+            int searchPos = 15;
+            int httpPos   = reqLine.indexOf(" HTTP/", searchPos);
+            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
+
+            while (searchPos < paramsEnd) {
+              int nextAmp = reqLine.indexOf('&', searchPos);
+              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
+              String pair = reqLine.substring(searchPos, endStr);
+              int eq = pair.indexOf('=');
+              if (eq > 0) {
+                String key = pair.substring(0, eq);
+                int    val = constrain(pair.substring(eq + 1).toInt(), 1, 60);
+                if      (key == "ip") insidePhaseMins  = val;
+                else if (key == "op") outsidePhaseMins = val;
+              }
+              searchPos = endStr + 1;
+            }
+            savePhaseMins();
           } else if (reqLine.startsWith("GET /savepwm?")) {
             pwmSubmitted = true;
 

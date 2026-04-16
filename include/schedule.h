@@ -23,3 +23,9 @@ void manageSchedules();
 extern int valvePwm[6];
 void loadValvePwm();
 void saveValvePwm();
+
+// Auto alternation phase durations (minutes)
+extern int insidePhaseMins;
+extern int outsidePhaseMins;
+void loadPhaseMins();
+void savePhaseMins();

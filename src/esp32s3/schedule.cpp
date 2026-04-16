@@ -11,6 +11,9 @@ int currentScheduleIndex = -1;
 // [0-2] = on% for inside/outside/tank, [3-5] = hold% for inside/outside/tank
 int valvePwm[6] = {100, 100, 100, 50, 50, 50};
 
+int insidePhaseMins  = 5;
+int outsidePhaseMins = 5;
+
 void loadSchedules() {
   eepromLoadSchedules();
 }
@@ -25,6 +28,14 @@ void loadValvePwm() {
 
 void saveValvePwm() {
   eepromSaveValvePwm();
+}
+
+void loadPhaseMins() {
+  eepromLoadPhaseMins();
+}
+
+void savePhaseMins() {
+  eepromSavePhaseMins();
 }
 
 void manageSchedules() {

@@ -44,6 +44,7 @@ void setup() {
 
   loadSchedules();
   loadValvePwm();
+  loadPhaseMins();
   insideValve.setPwmOn(valvePwm[0]);   outsideValve.setPwmOn(valvePwm[1]);   tankValve.setPwmOn(valvePwm[2]);
   insideValve.setPwmHold(valvePwm[3]); outsideValve.setPwmHold(valvePwm[4]); tankValve.setPwmHold(valvePwm[5]);
 
@@ -104,14 +105,16 @@ void loop() {
   bool autoOutside = outsideAutoSwitch.isOn();
 
   if (scheduleRunning) {
-    unsigned long elapsedMillis   = millis() - scheduleStartTimeMillis;
-    unsigned long phaseDurationMs = 5UL * 60000UL;
-    unsigned long phaseElapsedMs  = elapsedMillis % phaseDurationMs;
-    unsigned long phaseNum        = elapsedMillis / phaseDurationMs;
-    bool evenPhase = (phaseNum % 2) == 0;
+    unsigned long elapsedMillis     = millis() - scheduleStartTimeMillis;
+    unsigned long insideDurationMs  = (unsigned long)insidePhaseMins  * 60000UL;
+    unsigned long outsideDurationMs = (unsigned long)outsidePhaseMins * 60000UL;
+    unsigned long cycleDurationMs   = insideDurationMs + outsideDurationMs;
+    unsigned long cycleElapsedMs    = elapsedMillis % cycleDurationMs;
+    bool insidePhase     = cycleElapsedMs < insideDurationMs;
+    unsigned long phaseElapsedMs = insidePhase ? cycleElapsedMs : (cycleElapsedMs - insideDurationMs);
     bool inOverlap = phaseElapsedMs < VALVE_OVERLAP_MS;
 
-    if (evenPhase) {
+    if (insidePhase) {
       reqInside  = autoInside;
       reqOutside = inOverlap ? autoOutside : false;
     } else {
