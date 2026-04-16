@@ -253,12 +253,12 @@ void webserverBegin() {
         String t = request->getParam(keyTime)->value();
         int c = t.indexOf(':');
         if (c >= 0) {
-          schedules[i].startHour   = t.substring(0, c).toInt();
-          schedules[i].startMinute = t.substring(c + 1).toInt();
+          schedules[i].startHour   = constrain(t.substring(0, c).toInt(),   0,  23);
+          schedules[i].startMinute = constrain(t.substring(c + 1).toInt(),  0,  59);
         }
       }
       if (request->hasParam(keyDur)) {
-        schedules[i].durationMinutes = request->getParam(keyDur)->value().toInt();
+        schedules[i].durationMinutes = constrain(request->getParam(keyDur)->value().toInt(), 0, 300);
       }
     }
     saveSchedules();
