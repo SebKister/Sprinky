@@ -1,11 +1,11 @@
 #pragma once
 
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "1.3.2"
 
 // --- Hardware Pins (ESP32-S3-WROOM-1) ---
 const int PIN_PUMP            =  4;
-const int PIN_VALVE_INSIDE    =  5;
-const int PIN_VALVE_OUTSIDE   =  6;
+const int PIN_VALVE_INSIDE    =  6;
+const int PIN_VALVE_OUTSIDE   =  5;
 const int PIN_VALVE_TANK      =  7;
 const int PIN_SW_INSIDE_AUTO  =  8; // Must be ON for schedule to water inside
 const int PIN_SW_INSIDE       =  9;
