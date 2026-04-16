@@ -2,7 +2,8 @@
 
 extern bool webReqInside;
 extern bool webReqOutside;
+extern bool otaInProgress;
 
 void webserverBegin();
-void handleClient();
+void webserverPushStatus();
 void printWiFiStatus();
