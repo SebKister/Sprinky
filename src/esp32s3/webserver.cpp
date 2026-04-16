@@ -257,7 +257,7 @@ void handleClient() {
           if (formSubmitted) client.println("<p style='color:green'>Schedules Updated &amp; Saved to EEPROM!</p>");
 
           char phaseDesc[64];
-          sprintf(phaseDesc, "Automatically alternates Tank -> Inside (%dmin) -> Outside (%dmin).", insidePhaseMins, outsidePhaseMins);
+          snprintf(phaseDesc, sizeof(phaseDesc), "Automatically alternates Tank -> Inside (%dmin) -> Outside (%dmin).", insidePhaseMins, outsidePhaseMins);
           client.print("<h3>Schedules</h3><p>"); client.print(phaseDesc); client.println("</p>");
           client.println("<form action='/save' method='GET'>");
           client.println("<table><tr><th>ID</th><th>Active</th><th>Start Time (HH:MM)</th><th>Duration (Mins)</th></tr>");
