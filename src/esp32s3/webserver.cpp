@@ -319,6 +319,7 @@ void webserverBegin() {
   // --- OTA POST (upload) ---
   server.on("/update", HTTP_POST,
     [](AsyncWebServerRequest* request) {
+      if (!checkOTAAuth(request)) { request->send(401); return; }
       bool ok = !Update.hasError();
       String html = ok
         ? "<!DOCTYPE html><html><body><h3>Update Successful!</h3>"
