@@ -23,6 +23,8 @@ extern Switch outsideAutoSwitch;
 static AsyncWebServer server(80);
 static AsyncEventSource events("/events");
 
+bool otaInProgress = false;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -319,8 +321,9 @@ void webserverBegin() {
   // --- OTA POST (upload) ---
   server.on("/update", HTTP_POST,
     [](AsyncWebServerRequest* request) {
-      if (!checkOTAAuth(request)) { request->send(401); return; }
+      if (!checkOTAAuth(request)) { otaInProgress = false; request->send(401); return; }
       bool ok = !Update.hasError();
+      if (!ok) otaInProgress = false;
       String html = ok
         ? "<!DOCTYPE html><html><body><h3>Update Successful!</h3>"
           "<p>Rebooting...</p>"
@@ -337,13 +340,21 @@ void webserverBegin() {
       }
     },
     [](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
-      if (!checkOTAAuth(request)) { request->send(401); return; }
+      // Auth is enforced by the completion handler; silently drop chunks from
+      // unauthenticated requests without attempting to send a response here.
+      if (!checkOTAAuth(request)) return;
       if (index == 0) {
+        otaInProgress = true;
         shutdownIrrigation();
         Serial.printf("OTA: start %s\n", filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); otaInProgress = false; return; }
       }
-      if (Update.write(data, len) != len) Update.printError(Serial);
+      if (!Update.isRunning()) return;
+      if (Update.write(data, len) != len) {
+        Update.printError(Serial);
+        Update.abort();
+        return;
+      }
       if (final) {
         if (Update.end(true)) Serial.printf("OTA: done (%u bytes)\n", index + len);
         else Update.printError(Serial);

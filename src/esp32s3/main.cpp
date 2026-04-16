@@ -100,6 +100,7 @@ void setup() {
 
 void loop() {
   ArduinoOTA.handle();
+  if (otaInProgress) return;
   manageSchedules();
 
   unsigned long now = millis();
