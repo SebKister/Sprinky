@@ -29,6 +29,10 @@ bool webReqOutside = false;
 unsigned long valveActivationTime = 0;
 bool waitingForPump = false;
 
+// --- SSE push throttle ---
+static unsigned long lastSsePushMillis = 0;
+static const unsigned long SSE_PUSH_INTERVAL_MS = 500;
+
 void setup() {
   Serial.begin(115200);
 
@@ -97,7 +101,12 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   manageSchedules();
-  handleClient();
+
+  unsigned long now = millis();
+  if (now - lastSsePushMillis >= SSE_PUSH_INTERVAL_MS) {
+    webserverPushStatus();
+    lastSsePushMillis = now;
+  }
 
   bool reqInside   = insideSwitch.isOn()  || webReqInside;
   bool reqOutside  = outsideSwitch.isOn() || webReqOutside;

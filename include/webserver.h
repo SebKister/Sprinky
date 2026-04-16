@@ -4,5 +4,5 @@ extern bool webReqInside;
 extern bool webReqOutside;
 
 void webserverBegin();
-void handleClient();
+void webserverPushStatus();
 void printWiFiStatus();

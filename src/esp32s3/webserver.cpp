@@ -1,4 +1,6 @@
 #include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include <Update.h>
 #include <base64.h>
 #include "webserver.h"
@@ -18,77 +20,208 @@ extern Switch outsideSwitch;
 extern Switch insideAutoSwitch;
 extern Switch outsideAutoSwitch;
 
-static WiFiServer server(80);
+static AsyncWebServer server(80);
+static AsyncEventSource events("/events");
 
-void webserverBegin() {
-  server.begin();
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 void printWiFiStatus() {
   Serial.print("SSID: "); Serial.println(WiFi.SSID());
   Serial.print("IP Address: "); Serial.println(WiFi.localIP());
 }
 
-static void printHTMLHeader(WiFiClient& client) {
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:text/html");
-  client.println("Connection: close");
-  client.println();
-  client.println("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-  client.println("<style>body{font-family:Arial; padding: 20px;} table, th, td {border: 1px solid black; border-collapse: collapse; padding: 5px;}</style></head><body>");
-  client.println("<h2>Sprinky Controller - Merida</h2>");
+static bool checkOTAAuth(AsyncWebServerRequest* request) {
+  if (!request->hasHeader("Authorization")) return false;
+  String expected = "Basic " + base64::encode(String(OTA_USER) + ":" + OTA_PASS);
+  return request->header("Authorization") == expected;
 }
 
-static void printHTMLFooter(WiFiClient& client) {
-  client.println("</body></html>");
+static String parseQueryString(AsyncWebServerRequest* request, const char* name) {
+  if (request->hasParam(name)) return request->getParam(name)->value();
+  return "";
 }
 
-static void sendAuth401(WiFiClient& client) {
-  client.println("HTTP/1.1 401 Unauthorized");
-  client.println("WWW-Authenticate: Basic realm=\"Sprinky OTA\"");
-  client.println("Content-type:text/html");
-  client.println("Connection: close");
-  client.println();
-  client.println("<!DOCTYPE html><html><body><h3>401 Unauthorized</h3></body></html>");
+// ---------------------------------------------------------------------------
+// HTML page
+// ---------------------------------------------------------------------------
+
+static String buildPage(bool formSaved, bool phaseSaved, bool pwmSaved) {
+  unsigned long e = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
+  int eh = (e % 86400L) / 3600;
+  int em = (e % 3600) / 60;
+  char timeStr[6];
+  sprintf(timeStr, "%02d:%02d", eh, em);
+
+  char phaseDesc[64];
+  sprintf(phaseDesc, "Alternates Inside (%dmin) then Outside (%dmin) per cycle.", insidePhaseMins, outsidePhaseMins);
+
+  String html = F("<!DOCTYPE html><html><head>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<style>"
+    "body{font-family:Arial;padding:20px;}"
+    "table,th,td{border:1px solid black;border-collapse:collapse;padding:5px;}"
+    ".on{color:green} .off{color:gray}"
+    ".btn{display:inline-block;padding:12px 24px;margin-right:12px;color:white;"
+         "text-decoration:none;border-radius:6px;font-size:16px}"
+    ".btn-on{background:#4CAF50} .btn-off{background:#aaa}"
+    "</style>"
+    "<script>"
+    "var es=new EventSource('/events');"
+    "function upd(id,val,onText,offText,onCls,offCls){"
+    "  var el=document.getElementById(id); if(!el)return;"
+    "  var on=(val==='1'||val==='ON'||val==='OPEN'||val==='running');"
+    "  el.textContent=on?onText:offText;"
+    "  el.className=on?onCls:offCls;"
+    "}"
+    "es.addEventListener('pump',     function(e){upd('s-pump',    e.data,'ON','OFF','on','off')});"
+    "es.addEventListener('tank',     function(e){upd('s-tank',    e.data,'OPEN','CLOSED','on','off')});"
+    "es.addEventListener('inside',   function(e){upd('s-inside',  e.data,'OPEN','CLOSED','on','off')});"
+    "es.addEventListener('outside',  function(e){upd('s-outside', e.data,'OPEN','CLOSED','on','off')});"
+    "es.addEventListener('swi',      function(e){upd('s-swi',     e.data,'ON','OFF','on','off')});"
+    "es.addEventListener('swo',      function(e){upd('s-swo',     e.data,'ON','OFF','on','off')});"
+    "es.addEventListener('swia',     function(e){upd('s-swia',    e.data,'ON','OFF','on','off')});"
+    "es.addEventListener('swoa',     function(e){upd('s-swoa',    e.data,'ON','OFF','on','off')});"
+    "es.addEventListener('sched',    function(e){"
+    "  var el=document.getElementById('s-sched'); if(!el)return;"
+    "  el.textContent=e.data; el.className=(e.data==='Idle')?'off':'on';"
+    "});"
+    "es.addEventListener('time',     function(e){"
+    "  var el=document.getElementById('s-time'); if(el) el.textContent=e.data+' (UTC-6)';"
+    "});"
+    "</script>"
+    "</head><body>");
+
+  html += "<h2>Sprinky Controller - Merida</h2>";
+  html += "<p>Time: <span id='s-time'>" + String(timeStr) + " (UTC-6)</span></p>";
+  html += "<p>Firmware: v" FIRMWARE_VERSION "</p>";
+
+  // --- Schedules ---
+  if (formSaved) html += "<p style='color:green'>Schedules saved!</p>";
+  html += "<h3>Schedules</h3><p>" + String(phaseDesc) + "</p>";
+  html += "<form action='/save' method='GET'>";
+  html += "<table><tr><th>ID</th><th>Active</th><th>Start (HH:MM)</th><th>Duration (min)</th></tr>";
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    char ts[6];
+    sprintf(ts, "%02d:%02d", schedules[i].startHour, schedules[i].startMinute);
+    html += "<tr><td>" + String(i) + "</td>";
+    html += "<td><input type='checkbox' name='act" + String(i) + "' value='1'" +
+            (schedules[i].active ? " checked" : "") + "></td>";
+    html += "<td><input type='time' name='time" + String(i) + "' value='" + ts + "'></td>";
+    html += "<td><input type='number' name='dur" + String(i) + "' value='" +
+            schedules[i].durationMinutes + "' min='0' max='300'></td></tr>";
+  }
+  html += "</table><br><input type='submit' value='Save'></form>";
+
+  // --- Auto Phase Durations ---
+  if (phaseSaved) html += "<p style='color:green'>Phase durations saved!</p>";
+  html += "<h3>Auto Phase Durations</h3>";
+  html += "<form action='/savephase' method='GET'>";
+  html += "<table><tr><th>Zone</th><th>Duration (min)</th></tr>";
+  html += "<tr><td>Inside</td><td><input type='number' name='ip' value='" +
+          String(insidePhaseMins) + "' min='1' max='60'></td></tr>";
+  html += "<tr><td>Outside</td><td><input type='number' name='op' value='" +
+          String(outsidePhaseMins) + "' min='1' max='60'></td></tr>";
+  html += "</table><br><input type='submit' value='Save'></form>";
+
+  // --- Manual Zone Control ---
+  html += "<h3>Manual Zone Control</h3><p style='margin-bottom:8px'>";
+  html += webReqInside
+    ? "<a href='/zone?inside=0' class='btn btn-on'>Inside: ON</a>"
+    : "<a href='/zone?inside=1' class='btn btn-off'>Inside: OFF</a>";
+  html += webReqOutside
+    ? "<a href='/zone?outside=0' class='btn btn-on'>Outside: ON</a>"
+    : "<a href='/zone?outside=1' class='btn btn-off'>Outside: OFF</a>";
+  html += "</p>";
+
+  // --- Status (live via SSE) ---
+  html += "<h3>Status</h3>";
+  html += "<table><tr><th>Component</th><th>State</th></tr>";
+
+  auto row = [&](const char* label, const char* id, bool on, const char* onT, const char* offT) {
+    html += "<tr><td>"; html += label;
+    html += "</td><td class='"; html += (on ? "on" : "off");
+    html += "' id='"; html += id; html += "'>";
+    html += (on ? onT : offT);
+    html += "</td></tr>";
+  };
+
+  row("Pump",           "s-pump",   pumpActive,                   "ON",   "OFF");
+  row("Tank Valve",     "s-tank",   tankValve.isActive(),         "OPEN", "CLOSED");
+  row("Inside Valve",   "s-inside", insideValve.isActive(),       "OPEN", "CLOSED");
+  row("Outside Valve",  "s-outside",outsideValve.isActive(),      "OPEN", "CLOSED");
+  row("Inside Switch",  "s-swi",    insideSwitch.getState(),      "ON",   "OFF");
+  row("Outside Switch", "s-swo",    outsideSwitch.getState(),     "ON",   "OFF");
+  row("Inside Auto SW", "s-swia",   insideAutoSwitch.getState(),  "ON",   "OFF");
+  row("Outside Auto SW","s-swoa",   outsideAutoSwitch.getState(), "ON",   "OFF");
+
+  String schedText = scheduleRunning
+    ? ("Running (#" + String(currentScheduleIndex) + ")")
+    : "Idle";
+  html += "<tr><td>Schedule</td><td class='";
+  html += scheduleRunning ? "on" : "off";
+  html += "' id='s-sched'>" + schedText + "</td></tr>";
+  html += "</table>";
+
+  // --- Valve PWM ---
+  if (pwmSaved) html += "<p style='color:green'>Valve PWM saved!</p>";
+  html += "<h3>Valve PWM %</h3>";
+  html += "<form action='/savepwm' method='GET'>";
+  html += "<table><tr><th>Valve</th><th>On %</th><th>Hold %</th></tr>";
+  html += "<tr><td>Inside</td>"
+          "<td><input type='number' name='vi' value='" + String(insideValve.getPwmOn())   + "' min='0' max='100'></td>"
+          "<td><input type='number' name='hi' value='" + String(insideValve.getPwmHold()) + "' min='0' max='100'></td></tr>";
+  html += "<tr><td>Outside</td>"
+          "<td><input type='number' name='vo' value='" + String(outsideValve.getPwmOn())   + "' min='0' max='100'></td>"
+          "<td><input type='number' name='ho' value='" + String(outsideValve.getPwmHold()) + "' min='0' max='100'></td></tr>";
+  html += "<tr><td>Tank</td>"
+          "<td><input type='number' name='vt' value='" + String(tankValve.getPwmOn())   + "' min='0' max='100'></td>"
+          "<td><input type='number' name='ht' value='" + String(tankValve.getPwmHold()) + "' min='0' max='100'></td></tr>";
+  html += "</table><br><input type='submit' value='Save'></form>";
+
+  html += "<hr><p><a href='/update'>Firmware Update</a></p>";
+  html += "</body></html>";
+  return html;
 }
 
-static bool checkOTAAuth(const String& authHeader) {
-  if (!authHeader.startsWith("Basic ")) return false;
-  String expected = base64::encode(String(OTA_USER) + ":" + OTA_PASS);
-  return authHeader.substring(6) == expected;
-}
+// ---------------------------------------------------------------------------
+// SSE push  (called from main loop)
+// ---------------------------------------------------------------------------
 
-static void sendOTAResponse(WiFiClient& client, bool success) {
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:text/html");
-  client.println("Connection: close");
-  client.println();
-  if (success) {
-    client.println("<!DOCTYPE html><html><body>");
-    client.println("<h3>Update Successful!</h3>");
-    client.println("<p>Rebooting... page will reload in 10 seconds.</p>");
-    client.println("<script>setTimeout(function(){window.location='/';},10000);</script>");
-    client.println("</body></html>");
+void webserverPushStatus() {
+  if (events.count() == 0) return;
+
+  unsigned long e = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
+  int eh = (e % 86400L) / 3600;
+  int em = (e % 3600) / 60;
+  char timeStr[6];
+  sprintf(timeStr, "%02d:%02d", eh, em);
+
+  events.send(pumpActive              ? "1" : "0", "pump");
+  events.send(tankValve.isActive()    ? "1" : "0", "tank");
+  events.send(insideValve.isActive()  ? "1" : "0", "inside");
+  events.send(outsideValve.isActive() ? "1" : "0", "outside");
+  events.send(insideSwitch.getState()      ? "1" : "0", "swi");
+  events.send(outsideSwitch.getState()     ? "1" : "0", "swo");
+  events.send(insideAutoSwitch.getState()  ? "1" : "0", "swia");
+  events.send(outsideAutoSwitch.getState() ? "1" : "0", "swoa");
+  events.send(timeStr, "time");
+
+  if (scheduleRunning) {
+    String s = "Running (#" + String(currentScheduleIndex) + ")";
+    events.send(s.c_str(), "sched");
   } else {
-    client.println("<!DOCTYPE html><html><body><h3>Update Failed</h3>");
-    client.print("<p>Error: ");
-    Update.printError(client);
-    client.println("</p><p><a href='/update'>Try Again</a></p></body></html>");
+    events.send("Idle", "sched");
   }
 }
 
-static const unsigned long OTA_READ_TIMEOUT_MS = 10000;
-
-static bool waitForByte(WiFiClient& client) {
-  unsigned long start = millis();
-  while (!client.available()) {
-    if (!client.connected() || millis() - start > OTA_READ_TIMEOUT_MS) return false;
-    delay(1);
-  }
-  return true;
-}
+// ---------------------------------------------------------------------------
+// OTA upload handler
+// ---------------------------------------------------------------------------
 
 static void shutdownIrrigation() {
+  extern bool pumpActive;
   pumpActive = false;
   digitalWrite(PIN_PUMP, LOW);
   insideValve.turnOff();
@@ -98,371 +231,130 @@ static void shutdownIrrigation() {
   Serial.println("OTA: irrigation shut down");
 }
 
-static void handleOTAUpload(WiFiClient& client, int contentLength) {
-  shutdownIrrigation();
-  client.setTimeout(OTA_READ_TIMEOUT_MS / 1000);
+// ---------------------------------------------------------------------------
+// Server setup
+// ---------------------------------------------------------------------------
 
-  // Extract the multipart boundary from the first line of the body
-  // The body starts with: --boundary\r\n
-  String boundary = "";
-  while (client.connected()) {
-    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
-    char c = client.read();
-    contentLength--;
-    if (c == '\n') break;
-    if (c != '\r') boundary += c;
-  }
+void webserverBegin() {
+  // --- Main page ---
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+    bool fs = request->hasParam("_fs");
+    bool ps = request->hasParam("_ps");
+    bool ws = request->hasParam("_ws");
+    request->send(200, "text/html", buildPage(fs, ps, ws));
+  });
 
-  // Skip part headers (Content-Disposition, Content-Type, etc.) until blank line
-  String line = "";
-  while (client.connected()) {
-    if (!waitForByte(client)) { sendOTAResponse(client, false); return; }
-    char c = client.read();
-    contentLength--;
-    if (c == '\n') {
-      if (line.length() == 0 || line == "\r") break;
-      line = "";
-    } else {
-      line += c;
-    }
-  }
-
-  // Remaining contentLength = binary data + \r\n + boundary footer
-  // boundary already contains the leading "--", so footer "\r\n--boundary--\r\n" = boundary.length() + 6
-  size_t footerSize = boundary.length() + 6;
-  size_t firmwareSize = (contentLength > (int)footerSize) ? contentLength - footerSize : 0;
-
-  if (firmwareSize == 0 || !Update.begin(firmwareSize)) {
-    sendOTAResponse(client, false);
-    return;
-  }
-
-  Serial.printf("OTA: receiving %u bytes...\n", firmwareSize);
-
-  uint8_t buf[1024];
-  size_t remaining = firmwareSize;
-  while (remaining > 0 && client.connected()) {
-    size_t toRead = (remaining < sizeof(buf)) ? remaining : sizeof(buf);
-    size_t bytesRead = client.readBytes(buf, toRead);
-    if (bytesRead == 0) {
-      Serial.println("OTA: read timeout, aborting");
-      Update.abort();
-      sendOTAResponse(client, false);
-      return;
-    }
-    if (Update.write(buf, bytesRead) != bytesRead) {
-      Update.abort();
-      sendOTAResponse(client, false);
-      return;
-    }
-    remaining -= bytesRead;
-  }
-
-  if (remaining > 0) {
-    Serial.printf("OTA: incomplete upload (%u bytes missing), aborting\n", remaining);
-    Update.abort();
-    sendOTAResponse(client, false);
-    return;
-  }
-
-  // Drain remaining body (boundary footer)
-  unsigned long drainStart = millis();
-  while (contentLength > (int)firmwareSize && client.connected()) {
-    if (client.available()) {
-      client.read();
-    } else if (millis() - drainStart > OTA_READ_TIMEOUT_MS) {
-      break;
-    } else {
-      delay(1);
-    }
-  }
-
-  bool success = Update.end();
-  sendOTAResponse(client, success);
-
-  if (success) {
-    Serial.println("OTA web update successful, rebooting...");
-    client.flush();
-    delay(500);
-    ESP.restart();
-  }
-}
-
-void handleClient() {
-  WiFiClient client = server.available();
-  if (!client) return;
-
-  String reqLine = "";
-  String firstLine = "";
-  String authHeader = "";
-  bool formSubmitted = false;
-  bool pwmSubmitted  = false;
-  int contentLength = 0;
-
-  while (client.connected()) {
-    if (client.available()) {
-      char c = client.read();
-
-      if (c != '\n' && c != '\r') {
-        reqLine += c;
-      } else if (c == '\n') {
-        if (firstLine.length() == 0 && reqLine.length() > 0) {
-          firstLine = reqLine;
-        }
-        if (reqLine.startsWith("Content-Length: ")) {
-          contentLength = reqLine.substring(16).toInt();
-        }
-        if (reqLine.startsWith("Authorization: ")) {
-          authHeader = reqLine.substring(15);
-        }
-
-        if (reqLine.length() == 0) {
-          // Handle /update routes — require Basic Auth
-          if (firstLine.startsWith("GET /update") || firstLine.startsWith("POST /update")) {
-            if (!checkOTAAuth(authHeader)) {
-              sendAuth401(client);
-              break;
-            }
-
-            if (firstLine.startsWith("GET /update")) {
-              printHTMLHeader(client);
-              client.println("<h3>Firmware Update</h3>");
-              client.println("<form method='POST' action='/update' enctype='multipart/form-data'>");
-              client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
-              client.println("<input type='submit' value='Upload &amp; Flash'>");
-              client.println("</form>");
-              client.println("<p><a href='/'>Back to Status</a></p>");
-              printHTMLFooter(client);
-              break;
-            }
-
-            if (contentLength > 0) {
-              handleOTAUpload(client, contentLength);
-              break;
-            }
-          }
-
-          printHTMLHeader(client);
-
-          unsigned long e = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
-          int eh = (e % 86400L) / 3600;
-          int em = (e % 3600) / 60;
-          char timeStrDisp[6];
-          sprintf(timeStrDisp, "%02d:%02d", eh, em);
-          client.print("<p>Current System Time: ");
-          client.print(timeStrDisp);
-          client.println(" (UTC-6)</p>");
-          client.println("<p>Firmware: v" FIRMWARE_VERSION "</p>");
-
-          if (formSubmitted) client.println("<p style='color:green'>Schedules Updated &amp; Saved to EEPROM!</p>");
-
-          char phaseDesc[64];
-          sprintf(phaseDesc, "Automatically alternates Tank -> Inside (%dmin) -> Outside (%dmin).", insidePhaseMins, outsidePhaseMins);
-          client.print("<h3>Schedules</h3><p>"); client.print(phaseDesc); client.println("</p>");
-          client.println("<form action='/save' method='GET'>");
-          client.println("<table><tr><th>ID</th><th>Active</th><th>Start Time (HH:MM)</th><th>Duration (Mins)</th></tr>");
-
-          for (int i = 0; i < MAX_SCHEDULES; i++) {
-            client.print("<tr><td>"); client.print(i); client.print("</td>");
-            client.print("<td><input type='checkbox' name='act"); client.print(i); client.print("' value='1' ");
-            if (schedules[i].active) client.print("checked");
-            client.print("></td>");
-            char timeStr[6];
-            sprintf(timeStr, "%02d:%02d", schedules[i].startHour, schedules[i].startMinute);
-            client.print("<td><input type='time' name='time"); client.print(i); client.print("' value='"); client.print(timeStr); client.print("'></td>");
-            client.print("<td><input type='number' name='dur"); client.print(i); client.print("' value='"); client.print(schedules[i].durationMinutes); client.print("' min='0' max='300'></td>");
-            client.println("</tr>");
-          }
-          client.println("</table><br><input type='submit' value='Save'></form>");
-
-          client.println("<h3>Auto Phase Durations</h3>");
-          client.println("<form action='/savephase' method='GET'>");
-          client.println("<table><tr><th>Zone</th><th>Duration (min)</th></tr>");
-          client.print("<tr><td>Inside</td><td><input type='number' name='ip' value='");
-          client.print(insidePhaseMins);
-          client.println("' min='1' max='60'></td></tr>");
-          client.print("<tr><td>Outside</td><td><input type='number' name='op' value='");
-          client.print(outsidePhaseMins);
-          client.println("' min='1' max='60'></td></tr>");
-          client.println("</table><br><input type='submit' value='Save'></form>");
-
-          client.println("<h3>Manual Zone Control</h3>");
-          client.println("<p style='margin-bottom:8px'>");
-          // Inside toggle button
-          if (webReqInside) {
-            client.println("<a href='/zone?inside=0' style='display:inline-block;padding:12px 24px;margin-right:12px;background:#4CAF50;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Inside: ON</a>");
-          } else {
-            client.println("<a href='/zone?inside=1' style='display:inline-block;padding:12px 24px;margin-right:12px;background:#aaa;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Inside: OFF</a>");
-          }
-          // Outside toggle button
-          if (webReqOutside) {
-            client.println("<a href='/zone?outside=0' style='display:inline-block;padding:12px 24px;background:#4CAF50;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Outside: ON</a>");
-          } else {
-            client.println("<a href='/zone?outside=1' style='display:inline-block;padding:12px 24px;background:#aaa;color:white;text-decoration:none;border-radius:6px;font-size:16px'>Outside: OFF</a>");
-          }
-          client.println("</p>");
-
-          client.println("<h3>Status</h3>");
-          client.println("<table><tr><th>Component</th><th>State</th></tr>");
-
-          auto stateCell = [&](WiFiClient& c, const char* label, bool on, const char* onText, const char* offText) {
-            c.print("<tr><td>"); c.print(label); c.print("</td>");
-            c.print("<td style='color:"); c.print(on ? "green" : "gray"); c.print("'>");
-            c.print(on ? onText : offText);
-            c.println("</td></tr>");
-          };
-
-          stateCell(client, "Pump",              pumpActive,                   "ON",   "OFF");
-          stateCell(client, "Tank Valve",        tankValve.isActive(),         "OPEN", "CLOSED");
-          stateCell(client, "Inside Valve",      insideValve.isActive(),       "OPEN", "CLOSED");
-          stateCell(client, "Outside Valve",     outsideValve.isActive(),      "OPEN", "CLOSED");
-          stateCell(client, "Inside Switch",     insideSwitch.getState(),      "ON",   "OFF");
-          stateCell(client, "Outside Switch",    outsideSwitch.getState(),     "ON",   "OFF");
-          stateCell(client, "Inside Auto SW",    insideAutoSwitch.getState(),  "ON",   "OFF");
-          stateCell(client, "Outside Auto SW",   outsideAutoSwitch.getState(), "ON",   "OFF");
-
-          if (scheduleRunning) {
-            client.print("<tr><td>Schedule</td><td style='color:green'>Running (#");
-            client.print(currentScheduleIndex);
-            client.println(")</td></tr>");
-          } else {
-            client.println("<tr><td>Schedule</td><td style='color:gray'>Idle</td></tr>");
-          }
-          client.println("</table>");
-
-          if (pwmSubmitted) client.println("<p style='color:green'>Valve PWM Saved!</p>");
-
-          client.println("<h3>Valve PWM %</h3>");
-          client.println("<form action='/savepwm' method='GET'>");
-          client.println("<table><tr><th>Valve</th><th>On %</th><th>Hold %</th></tr>");
-
-          client.print("<tr><td>Inside</td>");
-          client.print("<td><input type='number' name='vi' value='"); client.print(insideValve.getPwmOn());   client.print("' min='0' max='100'></td>");
-          client.print("<td><input type='number' name='hi' value='"); client.print(insideValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
-
-          client.print("<tr><td>Outside</td>");
-          client.print("<td><input type='number' name='vo' value='"); client.print(outsideValve.getPwmOn());   client.print("' min='0' max='100'></td>");
-          client.print("<td><input type='number' name='ho' value='"); client.print(outsideValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
-
-          client.print("<tr><td>Tank</td>");
-          client.print("<td><input type='number' name='vt' value='"); client.print(tankValve.getPwmOn());   client.print("' min='0' max='100'></td>");
-          client.print("<td><input type='number' name='ht' value='"); client.print(tankValve.getPwmHold()); client.println("' min='0' max='100'></td></tr>");
-
-          client.println("</table><br><input type='submit' value='Save'></form>");
-
-          client.println("<hr><p><a href='/update'>Firmware Update</a></p>");
-          printHTMLFooter(client);
-          break;
-        } else {
-          if (reqLine.startsWith("GET /save?")) {
-            formSubmitted = true;
-            for (int i = 0; i < MAX_SCHEDULES; i++) schedules[i].active = false;
-
-            int searchPos = 10;
-            int httpPos = reqLine.indexOf(" HTTP/", searchPos);
-            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
-
-            while (searchPos < paramsEnd) {
-              int nextAmp = reqLine.indexOf('&', searchPos);
-              int endStr = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
-              String pair = reqLine.substring(searchPos, endStr);
-              int eq = pair.indexOf('=');
-              if (eq > 0) {
-                String key = pair.substring(0, eq);
-                String val = pair.substring(eq + 1);
-                int prefixLen = key.startsWith("time") ? 4 : 3;
-                int idx = key.substring(prefixLen).toInt();
-                if (idx >= 0 && idx < MAX_SCHEDULES) {
-                  if (key.startsWith("act")) {
-                    schedules[idx].active = true;
-                  } else if (key.startsWith("tim")) {
-                    int pC = val.indexOf("%3A");
-                    if (pC >= 0) {
-                      schedules[idx].startHour   = val.substring(0, pC).toInt();
-                      schedules[idx].startMinute = val.substring(pC + 3).toInt();
-                    } else {
-                      pC = val.indexOf(':');
-                      if (pC >= 0) {
-                        schedules[idx].startHour   = val.substring(0, pC).toInt();
-                        schedules[idx].startMinute = val.substring(pC + 1).toInt();
-                      }
-                    }
-                  } else if (key.startsWith("dur")) {
-                    schedules[idx].durationMinutes = val.toInt();
-                  }
-                }
-              }
-              searchPos = endStr + 1;
-            }
-            saveSchedules();
-          } else if (reqLine.startsWith("GET /zone?")) {
-            int httpPos   = reqLine.indexOf(" HTTP/", 10);
-            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
-            int searchPos = 10;
-            while (searchPos < paramsEnd) {
-              int nextAmp = reqLine.indexOf('&', searchPos);
-              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
-              String pair = reqLine.substring(searchPos, endStr);
-              int eq = pair.indexOf('=');
-              if (eq > 0) {
-                String key = pair.substring(0, eq);
-                int    val = pair.substring(eq + 1).toInt();
-                if      (key == "inside")  webReqInside  = (val != 0);
-                else if (key == "outside") webReqOutside = (val != 0);
-              }
-              searchPos = endStr + 1;
-            }
-          } else if (reqLine.startsWith("GET /savephase?")) {
-            int searchPos = 15;
-            int httpPos   = reqLine.indexOf(" HTTP/", searchPos);
-            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
-
-            while (searchPos < paramsEnd) {
-              int nextAmp = reqLine.indexOf('&', searchPos);
-              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
-              String pair = reqLine.substring(searchPos, endStr);
-              int eq = pair.indexOf('=');
-              if (eq > 0) {
-                String key = pair.substring(0, eq);
-                int    val = constrain(pair.substring(eq + 1).toInt(), 1, 60);
-                if      (key == "ip") insidePhaseMins  = val;
-                else if (key == "op") outsidePhaseMins = val;
-              }
-              searchPos = endStr + 1;
-            }
-            savePhaseMins();
-          } else if (reqLine.startsWith("GET /savepwm?")) {
-            pwmSubmitted = true;
-
-            int searchPos = 13;
-            int httpPos   = reqLine.indexOf(" HTTP/", searchPos);
-            int paramsEnd = (httpPos > 0) ? httpPos : reqLine.length();
-
-            while (searchPos < paramsEnd) {
-              int nextAmp = reqLine.indexOf('&', searchPos);
-              int endStr  = (nextAmp > -1 && nextAmp < paramsEnd) ? nextAmp : paramsEnd;
-              String pair = reqLine.substring(searchPos, endStr);
-              int eq = pair.indexOf('=');
-              if (eq > 0) {
-                String key = pair.substring(0, eq);
-                int    val = constrain(pair.substring(eq + 1).toInt(), 0, 100);
-                if      (key == "vi") { valvePwm[0] = val; insideValve.setPwmOn(val); }
-                else if (key == "vo") { valvePwm[1] = val; outsideValve.setPwmOn(val); }
-                else if (key == "vt") { valvePwm[2] = val; tankValve.setPwmOn(val); }
-                else if (key == "hi") { valvePwm[3] = val; insideValve.setPwmHold(val); }
-                else if (key == "ho") { valvePwm[4] = val; outsideValve.setPwmHold(val); }
-                else if (key == "ht") { valvePwm[5] = val; tankValve.setPwmHold(val); }
-              }
-              searchPos = endStr + 1;
-            }
-            saveValvePwm();
-          }
-          reqLine = "";
+  // --- Save schedules ---
+  server.on("/save", HTTP_GET, [](AsyncWebServerRequest* request) {
+    for (int i = 0; i < MAX_SCHEDULES; i++) schedules[i].active = false;
+    for (int i = 0; i < MAX_SCHEDULES; i++) {
+      String keyAct  = "act"  + String(i);
+      String keyTime = "time" + String(i);
+      String keyDur  = "dur"  + String(i);
+      if (request->hasParam(keyAct))  schedules[i].active = true;
+      if (request->hasParam(keyTime)) {
+        String t = request->getParam(keyTime)->value();
+        int c = t.indexOf(':');
+        if (c >= 0) {
+          schedules[i].startHour   = t.substring(0, c).toInt();
+          schedules[i].startMinute = t.substring(c + 1).toInt();
         }
       }
+      if (request->hasParam(keyDur)) {
+        schedules[i].durationMinutes = request->getParam(keyDur)->value().toInt();
+      }
     }
-  }
+    saveSchedules();
+    request->redirect("/?_fs=1");
+  });
 
-  delay(1);
-  client.stop();
+  // --- Save phase durations ---
+  server.on("/savephase", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (request->hasParam("ip")) insidePhaseMins  = constrain(request->getParam("ip")->value().toInt(), 1, 60);
+    if (request->hasParam("op")) outsidePhaseMins = constrain(request->getParam("op")->value().toInt(), 1, 60);
+    savePhaseMins();
+    request->redirect("/?_ps=1");
+  });
+
+  // --- Zone toggle ---
+  server.on("/zone", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (request->hasParam("inside"))  webReqInside  = request->getParam("inside")->value().toInt() != 0;
+    if (request->hasParam("outside")) webReqOutside = request->getParam("outside")->value().toInt() != 0;
+    request->redirect("/");
+  });
+
+  // --- Save valve PWM ---
+  server.on("/savepwm", HTTP_GET, [](AsyncWebServerRequest* request) {
+    auto applyPwm = [&](const char* key, int idx, std::function<void(int)> setFn) {
+      if (request->hasParam(key)) {
+        int v = constrain(request->getParam(key)->value().toInt(), 0, 100);
+        valvePwm[idx] = v;
+        setFn(v);
+      }
+    };
+    applyPwm("vi", 0, [](int v){ insideValve.setPwmOn(v); });
+    applyPwm("vo", 1, [](int v){ outsideValve.setPwmOn(v); });
+    applyPwm("vt", 2, [](int v){ tankValve.setPwmOn(v); });
+    applyPwm("hi", 3, [](int v){ insideValve.setPwmHold(v); });
+    applyPwm("ho", 4, [](int v){ outsideValve.setPwmHold(v); });
+    applyPwm("ht", 5, [](int v){ tankValve.setPwmHold(v); });
+    saveValvePwm();
+    request->redirect("/?_ws=1");
+  });
+
+  // --- OTA GET (form) ---
+  server.on("/update", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!checkOTAAuth(request)) {
+      request->requestAuthentication("Sprinky OTA");
+      return;
+    }
+    String html = "<!DOCTYPE html><html><body><h3>Firmware Update</h3>"
+                  "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                  "<input type='file' name='firmware' accept='.bin'><br><br>"
+                  "<input type='submit' value='Upload &amp; Flash'>"
+                  "</form><p><a href='/'>Back</a></p></body></html>";
+    request->send(200, "text/html", html);
+  });
+
+  // --- OTA POST (upload) ---
+  server.on("/update", HTTP_POST,
+    [](AsyncWebServerRequest* request) {
+      bool ok = !Update.hasError();
+      String html = ok
+        ? "<!DOCTYPE html><html><body><h3>Update Successful!</h3>"
+          "<p>Rebooting...</p>"
+          "<script>setTimeout(function(){window.location='/';},10000);</script>"
+          "</body></html>"
+        : "<!DOCTYPE html><html><body><h3>Update Failed</h3>"
+          "<p><a href='/update'>Try again</a></p></body></html>";
+      AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", html);
+      resp->addHeader("Connection", "close");
+      request->send(resp);
+      if (ok) {
+        delay(500);
+        ESP.restart();
+      }
+    },
+    [](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
+      if (!checkOTAAuth(request)) { request->send(401); return; }
+      if (index == 0) {
+        shutdownIrrigation();
+        Serial.printf("OTA: start %s\n", filename.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+      }
+      if (Update.write(data, len) != len) Update.printError(Serial);
+      if (final) {
+        if (Update.end(true)) Serial.printf("OTA: done (%u bytes)\n", index + len);
+        else Update.printError(Serial);
+      }
+    }
+  );
+
+  // --- SSE ---
+  events.onConnect([](AsyncEventSourceClient* client) {
+    Serial.println("SSE client connected");
+  });
+  server.addHandler(&events);
+
+  server.begin();
 }
