@@ -282,7 +282,7 @@ void webserverBegin() {
 
   // --- Save valve PWM ---
   server.on("/savepwm", HTTP_GET, [](AsyncWebServerRequest* request) {
-    auto applyPwm = [&](const char* key, int idx, std::function<void(int)> setFn) {
+    auto applyPwm = [&](const char* key, int idx, auto setFn) {
       if (request->hasParam(key)) {
         int v = constrain(request->getParam(key)->value().toInt(), 0, 100);
         valvePwm[idx] = v;
