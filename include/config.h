@@ -1,6 +1,6 @@
 #pragma once
 
-#define FIRMWARE_VERSION "1.3.2"
+#define FIRMWARE_VERSION "1.3.3"
 
 // --- Hardware Pins (ESP32-S3-WROOM-1) ---
 const int PIN_PUMP            =  4;
