@@ -8,6 +8,10 @@ bool scheduleRunning = false;
 unsigned long scheduleStartTimeMillis = 0;
 int currentScheduleIndex = -1;
 
+// When a schedule is manually stopped, suppress auto-restart until the
+// minute-of-day rolls past this value. -1 means no suppression.
+static int suppressMinuteOfDay = -1;
+
 // [0-2] = on% for inside/outside/tank, [3-5] = hold% for inside/outside/tank
 int valvePwm[6] = {100, 100, 100, 50, 50, 50};
 
@@ -55,8 +59,15 @@ void manageSchedules() {
   unsigned long estimatedEpoch = currentEpoch + ((now - lastEpochUpdateMillis) / 1000);
   int ch = (estimatedEpoch % 86400L) / 3600;
   int cm = (estimatedEpoch % 3600) / 60;
+  int mod = ch * 60 + cm;
+
+  // Clear suppression once we move past the minute the user stopped in
+  if (suppressMinuteOfDay >= 0 && mod != suppressMinuteOfDay) {
+    suppressMinuteOfDay = -1;
+  }
 
   if (!scheduleRunning) {
+    if (mod == suppressMinuteOfDay) return;
     for (int i = 0; i < MAX_SCHEDULES; i++) {
       if (schedules[i].active && schedules[i].startHour == ch && schedules[i].startMinute == cm) {
         scheduleRunning = true;
@@ -76,4 +87,15 @@ void manageSchedules() {
       Serial.println("Auto Schedule Finished.");
     }
   }
+}
+
+void stopSchedule() {
+  if (!scheduleRunning) return;
+  unsigned long estimatedEpoch = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
+  int ch = (estimatedEpoch % 86400L) / 3600;
+  int cm = (estimatedEpoch % 3600) / 60;
+  suppressMinuteOfDay = ch * 60 + cm;
+  scheduleRunning = false;
+  currentScheduleIndex = -1;
+  Serial.println("Schedule stopped manually.");
 }

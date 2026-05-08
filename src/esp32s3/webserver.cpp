@@ -83,6 +83,8 @@ static String buildPage(bool formSaved, bool phaseSaved, bool pwmSaved) {
     "es.addEventListener('sched',    function(e){"
     "  var el=document.getElementById('s-sched'); if(!el)return;"
     "  el.textContent=e.data; el.className=(e.data==='Idle')?'off':'on';"
+    "  var btn=document.getElementById('stop-sched');"
+    "  if(btn) btn.style.display=(e.data==='Idle')?'none':'inline-block';"
     "});"
     "es.addEventListener('time',     function(e){"
     "  var el=document.getElementById('s-time'); if(el) el.textContent=e.data+' (UTC-6)';"
@@ -156,9 +158,13 @@ static String buildPage(bool formSaved, bool phaseSaved, bool pwmSaved) {
   String schedText = scheduleRunning
     ? ("Running (#" + String(currentScheduleIndex) + ")")
     : "Idle";
-  html += "<tr><td>Schedule</td><td class='";
+  html += "<tr><td>Schedule</td><td><span class='";
   html += scheduleRunning ? "on" : "off";
-  html += "' id='s-sched'>" + schedText + "</td></tr>";
+  html += "' id='s-sched'>" + schedText + "</span>";
+  html += " <a id='stop-sched' href='/stopschedule' class='btn btn-on' "
+          "style='padding:4px 10px;font-size:13px;margin-left:10px;background:#d9534f;display:";
+  html += scheduleRunning ? "inline-block" : "none";
+  html += "'>Stop</a></td></tr>";
   html += "</table>";
 
   // --- Valve PWM ---
@@ -271,6 +277,12 @@ void webserverBegin() {
     if (request->hasParam("op")) outsidePhaseMins = constrain(request->getParam("op")->value().toInt(), 1, 60);
     savePhaseMins();
     request->redirect("/?_ps=1");
+  });
+
+  // --- Stop running schedule ---
+  server.on("/stopschedule", HTTP_GET, [](AsyncWebServerRequest* request) {
+    stopSchedule();
+    request->redirect("/");
   });
 
   // --- Zone toggle ---
