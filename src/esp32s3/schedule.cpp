@@ -12,6 +12,10 @@ int currentScheduleIndex = -1;
 // minute-of-day rolls past this value. -1 means no suppression.
 static int suppressMinuteOfDay = -1;
 
+// Set from the web-server task; consumed in manageSchedules() on the main
+// loop task so we never mutate schedule state from two tasks at once.
+static volatile bool stopRequested = false;
+
 // [0-2] = on% for inside/outside/tank, [3-5] = hold% for inside/outside/tank
 int valvePwm[6] = {100, 100, 100, 50, 50, 50};
 
@@ -61,6 +65,19 @@ void manageSchedules() {
   int cm = (estimatedEpoch % 3600) / 60;
   int mod = ch * 60 + cm;
 
+  // Honor any pending stop request from the web-server task before we
+  // touch schedule state below. Doing it here keeps all writes to
+  // scheduleRunning / currentScheduleIndex on the main loop task.
+  if (stopRequested) {
+    stopRequested = false;
+    if (scheduleRunning) {
+      suppressMinuteOfDay = mod;
+      scheduleRunning = false;
+      currentScheduleIndex = -1;
+      Serial.println("Schedule stopped manually.");
+    }
+  }
+
   // Clear suppression once we move past the minute the user stopped in
   if (suppressMinuteOfDay >= 0 && mod != suppressMinuteOfDay) {
     suppressMinuteOfDay = -1;
@@ -89,13 +106,9 @@ void manageSchedules() {
   }
 }
 
+// Safe to call from any task. The actual state mutation happens on the
+// main loop task in manageSchedules() to avoid a race with its read of
+// currentScheduleIndex.
 void stopSchedule() {
-  if (!scheduleRunning) return;
-  unsigned long estimatedEpoch = currentEpoch + ((millis() - lastEpochUpdateMillis) / 1000);
-  int ch = (estimatedEpoch % 86400L) / 3600;
-  int cm = (estimatedEpoch % 3600) / 60;
-  suppressMinuteOfDay = ch * 60 + cm;
-  scheduleRunning = false;
-  currentScheduleIndex = -1;
-  Serial.println("Schedule stopped manually.");
+  stopRequested = true;
 }
